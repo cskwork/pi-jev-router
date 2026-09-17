@@ -7,10 +7,16 @@ Select `auto/jev` to let TypeSafe's Jev choose a coding model and reasoning effo
 Requires [Pi](https://pi.dev) 0.85.1 or later and Node.js 22.19 or later. Tested against Pi 0.85.1. Jev evaluation requires a Vercel AI Gateway key and is billed separately from your generation provider.
 
 ```sh
+pi install npm:pi-jev-router
+```
+
+Or install from GitHub:
+
+```sh
 pi install git:github.com/mejiasd3v/pi-jev-router
 ```
 
-If you already have a manually installed copy, disable or move that copy outside Pi's extension directories before installing the package. Load only one copy.
+Keep only one installation: npm, Git, or a manual copy. Before switching sources, remove the old package with `pi remove <source>`, or move a manual copy outside Pi's extension directories.
 
 ## Use
 
@@ -54,7 +60,7 @@ When `jevRouter` is absent, built-in defaults retain fixed Luna `max` and Astra 
 
 Each option is a Pi `provider/model-id`, with a description for Jev and an optional `thinking` policy (see below). You can add other existing Pi providers here. Only authenticated, available, explicitly listed models are eligible. The fallback must also be listed. `timeoutMs` defaults to 5000 and must be an integer from 1 to 60000. Evaluation requests are not retried.
 
-**Migrating from 0.1.0:** move the contents of your old `routes.json` into the `jevRouter` key and unset `JEV_ROUTES_FILE`. Neither the route file nor that environment variable is read anymore.
+**Migrating from file-based configuration:** move the contents of your old `routes.json` into the `jevRouter` key and unset `JEV_ROUTES_FILE`. Neither the route file nor that environment variable is read anymore.
 
 The router restores the pinned backend's context window and output limit on reload/resume. Before the first pin, it uses the smallest available limits. Once selected, the backend's limits are applied before generation and refreshed on subsequent main requests. Pi's context display and compaction checks use those limits. Suggestions never change them.
 
