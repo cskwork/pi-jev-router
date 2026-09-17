@@ -11,6 +11,9 @@ importers:
       ai:
         specifier: 7.0.105
         version: 7.0.105(zod@4.6.5)
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.85.1

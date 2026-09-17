@@ -123,6 +123,15 @@ function mockGateway(t, respond = () => FAST) {
 	return requests;
 }
 
+test("declares the AI SDK's required runtime peers for Pi's peer-disabled npm installs", () => {
+	const manifest = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+	const sdk = JSON.parse(readFileSync(new URL(import.meta.resolve("ai/package.json")), "utf8"));
+	for (const peer of Object.keys(sdk.peerDependencies ?? {})) {
+		if (sdk.peerDependenciesMeta?.[peer]?.optional) continue;
+		assert.ok(manifest.dependencies?.[peer], `Pi skips peer installation; ${peer} must be a runtime dependency.`);
+	}
+});
+
 test("pins the session, forwards tools/auth/hooks/usage, and preserves actual model identity", async (t) => {
 	const requests = mockGateway(t);
 	const h = await harness();
