@@ -16,7 +16,7 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
-  "files": ["index.ts", "README.md", "LICENSE"],
+  "files": ["index.ts", "README.md", "LICENSE", "assets/logo.png"],
   "scripts": {
     "test": "node --test index.test.mjs"
   },
