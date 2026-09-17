@@ -16,7 +16,7 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
-  "files": ["index.ts", "routes.json", "README.md", "LICENSE"],
+  "files": ["index.ts", "README.md", "LICENSE"],
   "scripts": {
     "test": "node --test index.test.mjs"
   },
