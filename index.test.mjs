@@ -482,6 +482,20 @@ test("cancellation during evaluation or auth never falls through to inference or
 	assert.equal((await h.stream(context(), { signal: AbortSignal.abort() }).result()).stopReason, "aborted");
 });
 
+test("evaluation retries twice after timeouts before succeeding", async (t) => {
+	const originalTimeout = AbortSignal.timeout;
+	t.mock.method(AbortSignal, "timeout", (ms) => {
+		assert.equal(ms, 5000);
+		return originalTimeout(10);
+	});
+	let attempts = 0;
+	const requests = mockGateway(t, (options) => ++attempts < 3 ? delay(1000, FAST, { signal: options.signal }) : FAST);
+	const h = await harness();
+	assert.equal((await h.stream().result()).model, "gpt-5.6-luna");
+	assert.equal(requests.length, 3);
+	assert.equal(h.entries[0].data.source, "jev");
+});
+
 test("evaluation timeouts fall back, while authentication failures expose only the HTTP status", async (t) => {
 	const originalTimeout = AbortSignal.timeout;
 	t.mock.method(AbortSignal, "timeout", (ms) => {
