@@ -121,4 +121,31 @@ nub run test
 
 Tests mock network responses; no API keys or paid requests are needed.
 
+## Publishing
+
+`.github/workflows/publish.yml` publishes stable GitHub releases to npm using [trusted publishing](https://docs.npmjs.com/trusted-publishers/). It checks that the release tag matches `package.json`, installs from the frozen lockfile, and runs tests before publishing. Prereleases are skipped. The publish step uses npm's native OIDC flow; installs and tests use Nub.
+
+### One-time npm setup
+
+In [pi-jev-router package settings](https://www.npmjs.com/package/pi-jev-router/access), add a **GitHub Actions** trusted publisher:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `mejiasd3v` |
+| Repository | `pi-jev-router` |
+| Workflow filename | `publish.yml` |
+| Environment name | Leave blank |
+| Allowed actions | Allow direct `npm publish`, not just staged publishing |
+
+No npm token or GitHub secret is needed. Keep account 2FA enabled. This connection must be saved on npm before the first automated release; committing the workflow alone does not authorize npm publishing.
+
+### Release a version
+
+1. Bump `package.json`, commit, and push to `main`.
+2. Create and push the matching `vX.Y.Z` tag.
+3. Publish its GitHub release, for example `gh release create vX.Y.Z --verify-tag --generate-notes`.
+4. Wait for **Publish to npm** to succeed and verify the new npm version.
+
+Publishing a GitHub release triggers npm publication; pushing a tag alone does not. Release tags must include the publish workflow. A failed run can be rerun after fixing the npm connection; an already-published npm version cannot be overwritten.
+
 [MIT](LICENSE).
