@@ -63,22 +63,30 @@ Without configuration, defaults are Luna/`max`, Astra/`xhigh`, Astra fallback, a
 | `{"low": "Small changes", "high": "Hard problems"}` | Customize the allowed choices and their descriptions. |
 | Omitted | Inherit Pi's thinking level when the pin is created. |
 
-Levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Automatic choices are filtered to supported levels. Model and effort are chosen in **one evaluation**, not two calls.
+Levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Automatic choices are filtered to supported levels. Model and effort are chosen together, not in separate evaluations.
+
+### Long prompts
+
+The latest task takes priority; older history is dropped before splitting it. Requests have a **28,000-byte serialized UTF-8 budget**, including route descriptions. This is a conservative proxy for Jev's [roughly 32K-token request budget](https://docs.typesafe.ai/primitives#ask-speculative-questions), not an exact token count.
+
+Tasks that don't fit are split into at most **eight overlapping chunks**, evaluated **two at a time**, then combined in one final evaluation. The final evaluation is instructed to weigh requirements, not vote counts. This is still a heuristic: relationships across sections may be missed.
+
+Tasks over **192,000 UTF-8 bytes**, excessive chunk plans, or incomplete evaluations use fallback (or retain the existing pin during monitoring). The coding model always receives the original input; its context limits still apply.
 
 ## Session behavior
 
 - **Pin once.** Model and effort survive tool calls, compaction, `/reload`, and `/resume`. `/new`, `/fork`, and `/clone` choose afresh. Configuration changes don't rewrite existing pins.
 - **Suggest, never switch.** Monitoring checks new user text and may suggest a fork with another model, once per alternative per session. Use `/fork`, then `/model` and `/thinking` in the fork to follow it. No automatic forks or model switches.
-- **Control overhead.** Monitoring adds Jev calls and can delay generation by `timeoutMs` (1 to 60,000 ms). Set `"monitor": false` to disable it. Tool continuations don't trigger checks.
+- **Control overhead.** Evaluation timeouts retry up to three attempts of `timeoutMs` each (1 to 60,000 ms). The entire operation shares a ceiling of **3 × `timeoutMs`**, including chunks and combination: 15 seconds by default. Set `"monitor": false` to disable advisory checks; tool continuations don't trigger them.
 - **Fail explicitly.** Initial routing failures use the fallback, with its fixed/inherited effort or highest supported automatic choice. If an existing pin becomes unavailable or cannot accept the input, the router errors instead of switching.
 
 Context limits follow the pinned backend. The status and `/jev` show its effort; Pi's thinking picker does not track automatic choices. Selecting a concrete model bypasses Jev. Deferred/background generation is unsupported.
 
 ## Privacy and cost
 
-Routing and monitoring send up to **eight recent user/assistant text messages, capped at 16,000 characters**, plus route/effort descriptions to Vercel/TypeSafe. System prompts, reasoning blocks, tool-result blocks, images, and provider credentials are excluded. **Conversation text is not redacted and may contain secrets.**
+Routing and monitoring consider up to **eight recent user/assistant text messages**, limited to **192,000 UTF-8 bytes of source text**. Evaluations send selected text, route/effort descriptions, and chunk assessments to Vercel/TypeSafe. Overlaps, excerpts, and retries can send the same text more than once. System prompts, reasoning blocks, tool-result blocks, images, and provider credentials are excluded. **Conversation text is not redacted and may contain secrets.**
 
-Gateway evaluations are billed separately. `/jev` shows estimates; evaluation costs are not included in Pi's footer totals. Pinning favors cache reuse but does not guarantee cache hits, lower cost, or equal answer quality.
+Gateway evaluations are billed separately. Chunking uses at most nine evaluations before timeout retries, or 27 attempts total. `/jev` estimates sum returned usage; failed, cancelled, or timed-out calls may still be billed. Evaluation costs are not in Pi's footer totals. Pinning favors cache reuse but guarantees neither cache hits nor savings.
 
 <details>
 <summary>Migrating from file-based configuration</summary>

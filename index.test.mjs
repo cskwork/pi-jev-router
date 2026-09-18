@@ -437,7 +437,7 @@ test("only allowlisted available models are offered; Gateway failures never invo
 	assert.equal(none.calls.length, 0);
 });
 
-test("missing key, invalid choice, image-only and oversized prompts use the configured fallback", async (t) => {
+test("missing key, invalid choice, and image-only prompts use the configured fallback", async (t) => {
 	const requests = mockGateway(t, () => "openai/unapproved-paid-model");
 	const invalid = await harness();
 	assert.equal((await invalid.stream().result()).model, "gpt-6-astra");
@@ -449,6 +449,205 @@ test("missing key, invalid choice, image-only and oversized prompts use the conf
 	imageInput.messages = [{ role: "user", content: [{ type: "image", data: "PRIVATE BASE64", mimeType: "image/png" }], timestamp: 3 }];
 	assert.equal((await missing.stream(imageInput).result()).model, "gpt-6-astra");
 	assert.equal(requests.length, 1);
+});
+
+test("routes a whole long task, dropping older history instead of truncating the task", async (t) => {
+	const requests = mockGateway(t);
+	const h = await harness();
+	const text = "Follow all requirements:\n" + "x".repeat(20_000) + "\nIMPORTANT FINAL CONSTRAINT";
+	const input = context(text);
+	input.messages.unshift(user("Older conversation ".repeat(2000), 0));
+	assert.equal((await h.stream(input).result()).model, "gpt-5.6-luna");
+	assert.equal(requests.length, 1);
+	assert.deepEqual(requests[0].state.messages, [{ role: "user", text }]);
+	assert.ok(Buffer.byteLength(JSON.stringify({ state: requests[0].state, questions: requests[0].questions })) <= 28_000);
+	assert.equal(h.calls[0].context, input, "the generation provider still receives the original history");
+	assert.equal(input.messages.length, 2);
+	assert.equal(h.entries[0].data.source, "jev");
+});
+
+test("chunks complete Unicode task text with bounded parallelism, then pins only the combined decision", async (t) => {
+	const firstPair = Promise.withResolvers();
+	let active = 0, peak = 0, started = 0;
+	const requests = mockGateway(t, async (_options, body) => {
+		assert.ok(Buffer.byteLength(JSON.stringify(body)) <= 28_000, "the entire serialized request must fit");
+		if (body.state.stage === "combined") {
+			assert.equal(active, 0, "combining waits for every chunk");
+			assert.ok(body.state.assessments.some((item) => item.choice === "1"));
+			assert.ok(body.state.assessments.filter((item) => item.choice === "0").length > body.state.assessments.filter((item) => item.choice === "1").length);
+			assert.ok(body.state.assessments.every((item) => item.probabilities));
+			assert.match(body.questions.route.instructions, /Do not average scores or take a majority vote/);
+			return DEEP;
+		}
+		assert.equal(body.state.stage, "chunk");
+		active++;
+		peak = Math.max(peak, active);
+		if (++started === 2) firstPair.resolve();
+		await firstPair.promise;
+		active--;
+		const choice = body.state.chunk.text.includes("SECURITY_REQUIREMENT") ? "1" : "0";
+		return Response.json({ answers: { route: { type: "choice", choice, probabilities: { "0": choice === "0" ? 1 : 0, "1": choice === "1" ? 1 : 0 } } }, usage: { inputTokens: 1000, outputTokens: 0 } });
+	});
+	const pattern = "\u0000α😀\\\"\n";
+	const text = "Implement the requirements throughout this document.\n" + pattern.repeat(4000) + "\nSECURITY_REQUIREMENT: repair session isolation.\n" + pattern.repeat(4000) + "\nPreserve all behavior.";
+	const input = context(text);
+	input.messages.unshift({ role: "toolResult", content: [{ type: "text", text: "PRIVATE TOOL OUTPUT" }], timestamp: 0 });
+	const h = await harness();
+	assert.equal((await h.stream(input).result()).model, "gpt-6-astra");
+	assert.equal(peak, 2);
+	const chunks = requests.filter((request) => request.state.stage === "chunk").map((request) => request.state.chunk);
+	assert.ok(chunks.length > 2 && chunks.length <= 8);
+	const characters = Array.from(text);
+	let end = 0, reconstructed = "";
+	for (const chunk of chunks) {
+		assert.ok(chunk.start <= end && chunk.end > end, "chunks cover all text with forward progress");
+		assert.equal(chunk.text, characters.slice(chunk.start, chunk.end).join(""));
+		reconstructed += Array.from(chunk.text).slice(end - chunk.start).join("");
+		end = chunk.end;
+	}
+	assert.equal(reconstructed, text);
+	assert.equal(requests.length, chunks.length + 1);
+	assert.equal(h.calls[0].context, input);
+	assert.doesNotMatch(JSON.stringify(requests), /PRIVATE|gateway-test-key|codex-test-key/);
+	assert.equal(h.entries[0].data.routingChunks, chunks.length);
+	assert.equal(h.entries[0].data.evaluationRequests, requests.length);
+	assert.equal(h.entries[0].data.inputTokens, requests.length * 1000);
+	assert.equal(h.entries[0].data.usageIncomplete, false);
+	assert.equal(h.entries.filter((entry) => entry.name === "jev-pin").length, 1);
+	await h.stream(input).result();
+	assert.equal(requests.length, chunks.length + 1, "continuations do not repeat the chunk pipeline");
+});
+
+test("chunked choices respect effort policies and monitoring never replaces the session pin", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: {
+		options: { [FAST]: { description: "Routine work", thinking: { low: "Small changes", high: "Hard changes" } }, [DEEP]: { description: "Deep work", thinking: "high" } }, fallback: DEEP,
+	} }));
+	let desired = { target: FAST, thinking: "low" };
+	const requests = mockGateway(t, (_options, body) => body.state.stage === "combined" ? desired : { target: DEEP, thinking: "high" });
+	const h = await harness();
+	await h.stream(context("x".repeat(40000))).result();
+	assert.equal(h.calls[0].model.id, "gpt-5.6-luna");
+	assert.equal(h.calls[0].options.reasoning, "low", "only the final combined effort is pinned");
+	desired = { target: DEEP, thinking: "high" };
+	await h.stream(context("y".repeat(40000), 2)).result();
+	assert.equal(h.calls[1].model.id, "gpt-5.6-luna");
+	assert.equal(h.calls[1].options.reasoning, "low");
+	assert.equal(h.entries.filter((entry) => entry.name === "jev-pin").length, 1);
+	assert.equal(h.entries.filter((entry) => entry.name === "jev-suggestion").length, 1);
+	assert.match(requests.at(-1).questions.route.instructions, /Prefer keeping it/);
+	assert.deepEqual(Object.values(requests.at(-1).questions.route.criteria).map(({ model, thinking }) => [model, thinking]), [[DEEP, "high"], [FAST, "low"]]);
+	await h.commands.get("jev").handler("", h.ctx);
+	assert.match(h.notices.at(-1)[0], /evaluations: \d+, chunks planned: \d+/);
+	const completed = requests.length;
+	await h.stream(context("z".repeat(40000), 3)).result();
+	assert.equal(requests.length, completed, "suggested alternatives remain suppressed for long prompts too");
+});
+
+test("route descriptions and JSON escaping count toward every request budget", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	const config = { options: { [FAST]: { description: "a".repeat(10000) }, [DEEP]: { description: "b".repeat(10000) } }, fallback: DEEP };
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const requests = mockGateway(t, (_options, body) => {
+		assert.ok(Buffer.byteLength(JSON.stringify(body)) <= 28_000);
+		return FAST;
+	});
+	const h = await harness();
+	assert.equal((await h.stream(context("x".repeat(10000))).result()).model, "gpt-5.6-luna");
+	assert.equal(requests.at(-1).state.stage, "combined", "a short task can still need chunks when criteria are large");
+	const completed = requests.length;
+	config.options[FAST].description = "x".repeat(30000);
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const oversized = await harness();
+	assert.equal((await oversized.stream().result()).model, "gpt-6-astra");
+	assert.match(oversized.entries[0].data.reason, /insufficient room/);
+	assert.equal(requests.length, completed, "an impossible criteria budget must not send requests");
+});
+
+test("oversized inputs and excessive chunk plans fall back before any evaluation", async (t) => {
+	const requests = mockGateway(t);
+	for (const [text, reason] of [["x".repeat(192001), /192000-byte routing limit/], ["\u0000".repeat(50000), /more than 8 routing chunks/]]) {
+		const h = await harness();
+		const input = context(text);
+		assert.equal((await h.stream(input).result()).model, "gpt-6-astra");
+		assert.equal(h.calls[0].context, input);
+		assert.match(h.entries[0].data.reason, reason);
+	}
+	assert.equal(requests.length, 0);
+	const pinned = await harness();
+	await pinned.stream().result();
+	assert.equal((await pinned.stream(context("x".repeat(192001), 2)).result()).model, "gpt-5.6-luna");
+	assert.match(pinned.entries.findLast((entry) => entry.name === "jev-monitor").data.reason, /routing limit/);
+	assert.equal(requests.length, 1, "an over-budget monitor keeps the pin without making calls");
+});
+
+test("a failed chunk cancels its sibling and never combines a partial result", async (t) => {
+	const siblingStarted = Promise.withResolvers();
+	let siblingAborted = false;
+	const requests = mockGateway(t, async (options, body) => {
+		assert.equal(body.state.stage, "chunk");
+		if (body.state.chunk.index === 0) {
+			await siblingStarted.promise;
+			return Response.json({ error: "PRIVATE FAILED CHUNK BODY" }, { status: 503 });
+		}
+		return new Promise((_, reject) => {
+			options.signal.addEventListener("abort", () => { siblingAborted = true; reject(options.signal.reason); }, { once: true });
+			siblingStarted.resolve();
+		});
+	});
+	const h = await harness();
+	assert.equal((await h.stream(context("x".repeat(80000))).result()).model, "gpt-6-astra");
+	assert.equal(requests.length, 2);
+	assert.equal(siblingAborted, true);
+	assert.equal(h.entries[0].data.source, "fallback");
+	assert.equal(h.entries[0].data.usageIncomplete, true);
+	assert.match(h.entries[0].data.reason, /HTTP 503/);
+	assert.doesNotMatch(JSON.stringify(h.entries) + JSON.stringify(h.notices), /PRIVATE FAILED CHUNK BODY/);
+});
+
+test("cancellation during chunking or combination never generates or saves a pin", async (t) => {
+	let phase, started;
+	mockGateway(t, (options, body) => body.state.stage === phase ? new Promise((_, reject) => {
+		started.resolve();
+		options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+	}) : FAST);
+	for (phase of ["chunk", "combined"]) {
+		started = Promise.withResolvers();
+		const h = await harness();
+		const controller = new AbortController();
+		const pending = h.stream(context("x".repeat(50000)), { signal: controller.signal }).result();
+		await started.promise;
+		controller.abort();
+		assert.equal((await pending).stopReason, "aborted");
+		assert.equal(h.calls.length, 0);
+		assert.equal(h.entries.length, 0);
+	}
+});
+
+test("one overall deadline bounds chunks, combination, and retries while retaining reported usage", async (t) => {
+	const deadline = new AbortController();
+	let deadlines = 0;
+	t.mock.method(AbortSignal, "timeout", (ms) => {
+		if (ms === 15000) { deadlines++; return deadline.signal; }
+		assert.equal(ms, 5000);
+		return new AbortController().signal;
+	});
+	const combining = Promise.withResolvers();
+	const requests = mockGateway(t, (options, body) => body.state.stage === "combined" ? new Promise((_, reject) => {
+		combining.resolve();
+		options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+	}) : FAST);
+	const h = await harness();
+	const pending = h.stream(context("x".repeat(50000))).result();
+	await combining.promise;
+	deadline.abort(new DOMException("Routing deadline", "TimeoutError"));
+	assert.equal((await pending).model, "gpt-6-astra");
+	assert.equal(deadlines, 1);
+	assert.equal(requests.filter((request) => request.state.stage === "combined").length, 1, "a spent deadline must never retry");
+	assert.equal(h.entries[0].data.reason, "Jev timed out");
+	assert.equal(h.entries[0].data.inputTokens, (requests.length - 1) * 1000);
+	assert.equal(h.entries[0].data.evaluationRequests, requests.length);
+	assert.equal(h.entries[0].data.usageIncomplete, true);
 });
 
 test("cancellation during evaluation or auth never falls through to inference or retains a cancelled choice", async (t) => {
@@ -485,8 +684,8 @@ test("cancellation during evaluation or auth never falls through to inference or
 test("evaluation retries twice after timeouts before succeeding", async (t) => {
 	const originalTimeout = AbortSignal.timeout;
 	t.mock.method(AbortSignal, "timeout", (ms) => {
-		assert.equal(ms, 5000);
-		return originalTimeout(10);
+		assert.ok(ms === 5000 || ms === 15000);
+		return originalTimeout(ms === 5000 ? 10 : 1000);
 	});
 	let attempts = 0;
 	const requests = mockGateway(t, (options) => ++attempts < 3 ? delay(1000, FAST, { signal: options.signal }) : FAST);
@@ -499,8 +698,8 @@ test("evaluation retries twice after timeouts before succeeding", async (t) => {
 test("evaluation timeouts fall back, while authentication failures expose only the HTTP status", async (t) => {
 	const originalTimeout = AbortSignal.timeout;
 	t.mock.method(AbortSignal, "timeout", (ms) => {
-		assert.equal(ms, 5000);
-		return originalTimeout(10);
+		assert.ok(ms === 5000 || ms === 15000);
+		return originalTimeout(ms === 5000 ? 10 : 1000);
 	});
 	let rejectAuth = false;
 	mockGateway(t, (options) => rejectAuth ? Response.json({ error: "SECRET ERROR BODY" }, { status: 401 }) : delay(1000, FAST, { signal: options.signal }));
@@ -599,5 +798,6 @@ test("validates config and bounds routing text without sending thinking, tools, 
 	const rich = context();
 	rich.messages.unshift({ role: "assistant", content: [{ type: "thinking", thinking: "PRIVATE REASONING" }, { type: "text", text: "Previous answer" }], timestamp: 0 });
 	assert.deepEqual(routingInput(rich).messages, [{ role: "assistant", text: "Previous answer" }, { role: "user", text: "Fix a typo" }]);
-	assert.equal(routingInput(context("x".repeat(16001))).messages, undefined);
+	assert.equal(routingInput(context("x".repeat(16001))).messages[0].text.length, 16001);
+	assert.match(routingInput(context("x".repeat(192001))).reason, /routing limit/);
 });
