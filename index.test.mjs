@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ assert.ok(piAi, "Pi's installed pi-ai package must be available");
 const { createJiti } = piRequire("jiti");
 const jiti = createJiti(import.meta.url, { alias: { "@earendil-works/pi-ai": piAi } });
 const { default: extension, parseConfig, routingInput } = await jiti.import("./index.ts");
+const { convertToLlm } = await jiti.import("@earendil-works/pi-coding-agent");
 const { createAssistantMessageEventStream } = await import(pathToFileURL(piAi));
 // Never read or write the developer's settings.
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -75,10 +76,13 @@ async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = 
 		find: (provider, id) => provider === "auto" ? { ...registration.models[0], provider, api: registration.api, baseUrl: registration.baseUrl } : models.find((model) => model.provider === provider && model.id === id),
 	};
 	const ctx = {
+		cwd: agentDir,
+		getSystemPrompt: () => "PRIVATE SYSTEM INSTRUCTIONS",
 		modelRegistry: registry,
 		sessionManager: {
 			getSessionId: () => sessionId,
 			getEntries: () => entries.map(({ name, data }) => ({ type: "custom", customType: name, data })),
+			buildContextEntries: () => entries.map(({ name, data }) => ({ type: "custom", customType: name, data })),
 		},
 		ui: { setStatus() {}, notify: (...args) => notices.push(args) },
 	};
@@ -122,6 +126,183 @@ function mockGateway(t, respond = () => FAST) {
 	t.after(() => { globalThis.fetch = previous; });
 	return requests;
 }
+
+function configureSkills(t, extra = {}) {
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: {
+		options: { [FAST]: { description: "Routine" } }, fallback: FAST, skills: true, ...extra,
+	} }));
+	t.after(() => rmSync(settingsPath, { force: true }));
+}
+
+function skillFixture(name, extra = {}) {
+	const filePath = join(agentDir, `${name}.md`);
+	writeFileSync(filePath, `---\nname: ${name}\ndescription: Test skill\n---\nPRIVATE BODY for ${name}.\n`);
+	return { name, description: `Use ${name} for its specific task.`, filePath, baseDir: agentDir, disableModelInvocation: false, ...extra };
+}
+
+async function setSkills(h, skills) {
+	await h.handlers.get("before_agent_start")({ systemPromptOptions: { skills } }, h.ctx);
+}
+
+function mockSkillGateway(t, probabilities = {}) {
+	return mockGateway(t, (_options, body) => Response.json({
+		answers: Object.fromEntries(Object.entries(body.questions).map(([id, question]) => [id, {
+			type: "boolean", probability: probabilities[question.criteria.true.name] ?? 0.95,
+		}])), usage: { inputTokens: 1000, outputTokens: 0 },
+	}));
+}
+
+const skillContext = (h, messages) => h.handlers.get("context")({ messages }, h.ctx);
+
+test("skills are opt-in and work with concrete models without changing routing", async (t) => {
+	const skill = skillFixture("opt-in");
+	const requests = mockSkillGateway(t);
+	const disabled = await harness();
+	await setSkills(disabled, [skill]);
+	assert.equal(await skillContext(disabled, [user("Use the skill")]), undefined);
+	assert.equal(requests.length, 0);
+	assert.equal(parseConfig({ options: { [FAST]: { description: "x" } }, fallback: FAST }).skills, false);
+	for (const skills of [null, "true", 1, {}]) {
+		assert.throws(() => parseConfig({ options: { [FAST]: { description: "x" } }, fallback: FAST, skills }), /skills must be a boolean/);
+	}
+	configureSkills(t);
+	const h = await harness();
+	h.ctx.model = h.models[0];
+	await setSkills(h, [skill]);
+	const messages = [user("Use the skill")];
+	const result = await skillContext(h, messages);
+	assert.equal(messages.length, 1, "context input is not mutated");
+	assert.equal(result.messages.length, 2);
+	assert.match(result.messages[1].content, /PRIVATE BODY for opt-in/);
+	assert.match(result.messages[1].content, /References are relative to/);
+	assert.doesNotMatch(result.messages[1].content, /description: Test skill/);
+	const converted = convertToLlm(result.messages);
+	assert.deepEqual(routingInput({ messages: converted }), routingInput({ messages }), "injected skill instructions must not become a routing task or leak to Jev");
+	assert.equal(h.ctx.model, h.models[0]);
+	assert.equal(h.entries.filter((entry) => entry.name === "jev-pin").length, 0);
+	assert.equal(requests.length, 1);
+	assert.doesNotMatch(JSON.stringify(requests), /PRIVATE BODY|PRIVATE SYSTEM|gateway-test-key/);
+	await h.commands.get("jev").handler("", h.ctx);
+	assert.match(h.notices.at(-1)[0], /Skills: on/);
+});
+
+test("skills are reused on continuations and reload, selected for steering, and scoped to active context", async (t) => {
+	configureSkills(t);
+	const first = skillFixture("first"), second = skillFixture("second");
+	const requests = mockSkillGateway(t);
+	const h = await harness();
+	await setSkills(h, [first]);
+	const initial = [user("First task")];
+	const result = await skillContext(h, initial);
+	assert.equal(result.messages.filter((m) => m.customType === "jev-skills").length, 1);
+	// Stored instructions are reused without rereading the file.
+	rmSync(first.filePath);
+	assert.deepEqual((await skillContext(h, initial)).messages.map((m) => m.content), result.messages.map((m) => m.content));
+	assert.equal((await skillContext(h, result.messages)).messages.length, 2, "an existing injected block is not duplicated");
+	const resumed = await harness({ history: h.entries });
+	await setSkills(resumed, [first, second]);
+	assert.equal((await skillContext(resumed, initial)).messages.length, 2);
+	assert.equal(requests.length, 1);
+	const next = await skillContext(resumed, [...initial, user("A new steering request", 2)]);
+	assert.equal(requests.length, 2);
+	assert.deepEqual(Object.values(requests[1].questions).map((q) => q.criteria.true.name), ["second"]);
+	assert.equal(next.messages.filter((m) => m.customType === "jev-skills").length, 2);
+	assert.equal((await skillContext(resumed, [...initial, user("A new steering request", 2)])).messages.length, 4);
+	assert.equal(requests.length, 2);
+	// Simulate a branch/compaction where the previous load records and messages are gone.
+	resumed.ctx.sessionManager.buildContextEntries = () => [];
+	await setSkills(resumed, [second]);
+	assert.equal((await skillContext(resumed, [user("Second task after compaction", 3)])).messages.length, 2);
+	assert.equal(requests.length, 3);
+});
+
+test("skill selection skips explicit blocks, successful reads, aliases, and manual-only skills", async (t) => {
+	configureSkills(t);
+	const read = skillFixture("read-skill"), explicit = skillFixture("explicit"), hidden = skillFixture("hidden", { disableModelInvocation: true });
+	const fresh = skillFixture("fresh");
+	const alias = join(agentDir, "alias.md");
+	symlinkSync(read.filePath, alias);
+	const requests = mockSkillGateway(t);
+	const h = await harness();
+	await setSkills(h, [read, { ...read, name: "alias", filePath: alias }, explicit, hidden, fresh]);
+	const messages = [user(`<skill name="explicit" location="${explicit.filePath}">\nExplicit body\n</skill>`), {
+		role: "assistant", content: [{ type: "toolCall", id: "read", name: "read", arguments: { path: "@read-skill.md" } }], timestamp: 2,
+	}, { role: "toolResult", toolName: "read", toolCallId: "read", isError: false, content: [{ type: "text", text: "PRIVATE TOOL CONTENT" }], timestamp: 3 }, user("New request", 4)];
+	await skillContext(h, messages);
+	assert.deepEqual(Object.values(requests[0].questions).map((q) => q.criteria.true.name), ["fresh"]);
+	assert.doesNotMatch(JSON.stringify(requests), /PRIVATE TOOL CONTENT/);
+	const system = await harness();
+	await setSkills(system, [explicit]);
+	system.ctx.getSystemPrompt = () => messages[0].content;
+	assert.equal((await skillContext(system, [user("Task")])).messages.length, 1);
+	assert.equal(requests.length, 1);
+});
+
+test("failed and truncated reads do not mark a skill loaded; weak matches stay unloaded", async (t) => {
+	configureSkills(t);
+	const skill = skillFixture("read-again");
+	const requests = mockSkillGateway(t, { "read-again": 0.79 });
+	for (const result of [{ isError: true }, { isError: false, details: { truncation: { truncated: true } } }]) {
+		const h = await harness();
+		await setSkills(h, [skill]);
+		const messages = [{ role: "assistant", content: [{ type: "toolCall", id: "r", name: "read", arguments: { path: skill.filePath } }], timestamp: 0 },
+			{ role: "toolResult", toolCallId: "r", toolName: "read", content: [{ type: "text", text: "partial" }], timestamp: 1, ...result }, user("Task", 2)];
+		assert.equal((await skillContext(h, messages)).messages.length, 3);
+		await skillContext(h, messages);
+	}
+	assert.equal(requests.length, 2, "no-match decisions also avoid repeat evaluation on tool continuations");
+});
+
+test("skill limits and failures leave normal generation available and never expose error bodies", async (t) => {
+	configureSkills(t);
+	const skills = Array.from({ length: 4 }, (_, i) => skillFixture(`bounded-${i}`));
+	const requests = mockSkillGateway(t);
+	const h = await harness();
+	await setSkills(h, skills);
+	await skillContext(h, [user("Task")]);
+	assert.equal(h.entries.at(-1).data.loaded.length, 3);
+	const oversized = await harness();
+	await setSkills(oversized, [{ ...skills[0], description: "x".repeat(30000) }]);
+	assert.equal((await skillContext(oversized, [user("Task")])).messages.length, 1);
+	assert.equal(requests.length, 1);
+	const missing = await harness({ gatewayKey: false });
+	await setSkills(missing, skills);
+	assert.equal((await skillContext(missing, [user("Task")])).messages.length, 1);
+	assert.equal(requests.length, 1);
+	mockGateway(t, () => Response.json({ error: "PRIVATE FAILURE BODY" }, { status: 503 }));
+	const failed = await harness();
+	await setSkills(failed, skills);
+	assert.equal((await skillContext(failed, [user("Task")])).messages.length, 1);
+	assert.doesNotMatch(JSON.stringify(failed.notices) + JSON.stringify(failed.entries), /PRIVATE FAILURE BODY/);
+});
+
+test("skill file failures skip only that skill and cancellation saves no decision", async (t) => {
+	configureSkills(t);
+	const missing = skillFixture("missing-body"), huge = skillFixture("huge-body"), good = skillFixture("good-body");
+	rmSync(missing.filePath);
+	writeFileSync(huge.filePath, "x".repeat(50001));
+	mockSkillGateway(t);
+	const h = await harness();
+	await setSkills(h, [missing, huge, good]);
+	const result = await skillContext(h, [user("Task")]);
+	assert.match(result.messages.at(-1).content, /PRIVATE BODY for good-body/);
+	assert.deepEqual(h.entries.at(-1).data.loaded.map((s) => s.name), ["good-body"]);
+	assert.equal(h.notices.filter(([, level]) => level === "warning").length, 2);
+	const started = Promise.withResolvers();
+	mockGateway(t, (options) => new Promise((_, reject) => {
+		started.resolve();
+		options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+	}));
+	const cancelled = await harness();
+	await setSkills(cancelled, [good]);
+	const stop = new AbortController();
+	cancelled.ctx.signal = stop.signal;
+	const pending = skillContext(cancelled, [user("Task")]);
+	await started.promise;
+	stop.abort();
+	assert.equal(await pending, undefined);
+	assert.equal(cancelled.entries.length, 0);
+});
 
 test("declares the AI SDK's required runtime peers for Pi's peer-disabled npm installs", () => {
 	const manifest = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
