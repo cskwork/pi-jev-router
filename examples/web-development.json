@@ -23,6 +23,10 @@
         "description": "Multi-component implementation, cross-service debugging, code review, and QA or verification that connects evidence across UI, API, and tests. General-purpose OpenAI default.",
         "thinking": "medium"
       },
+      "openai-codex/gpt-6-astra": {
+        "description": "Architecture and planning: system design, implementation plans, ambiguous requirements, and difficult cross-service debugging on the OpenAI side. Counterpart to Claude Opus.",
+        "thinking": "medium"
+      },
       "openai-codex/gpt-5.6-terra": {
         "description": "Routine web development: implement a clear plan using existing components and API patterns, fix localized bugs, and add focused regression coverage.",
         "thinking": "medium"

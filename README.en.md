@@ -88,6 +88,7 @@ Merge [examples/web-development.json](examples/web-development.json) into your g
 | `openai-codex/gpt-5.6-luna` | Narrow exploration, mechanical edits, and small tests. |
 | `openai-codex/gpt-5.6-terra` | Planned web features, localized fixes, and regression coverage. |
 | `openai-codex/gpt-5.6-sol` | Multi-component implementation, debugging, review, and interpreting QA evidence. |
+| `openai-codex/gpt-6-astra` | Architecture and planning: system design, implementation plans, ambiguous requirements, and difficult debugging on the OpenAI side. |
 | `zai/glm-5.3` | Usage-limit fallback for either family. |
 
 These are editable task descriptions, not model benchmarks or guaranteed classifications. Use exact model IDs available in your Pi `/model` picker. Only authenticated models are offered. Choose another allowed fallback if you do not use Z.ai.
