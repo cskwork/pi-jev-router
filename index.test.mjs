@@ -14,7 +14,7 @@ const piAi = piRequire.resolve.paths("@earendil-works/pi-ai")
 assert.ok(piAi, "Pi's installed pi-ai package must be available");
 const { createJiti } = piRequire("jiti");
 const jiti = createJiti(import.meta.url, { alias: { "@earendil-works/pi-ai": piAi } });
-const { default: extension, parseConfig, routingInput } = await jiti.import("./index.ts");
+const { default: extension, parseConfig, routingInput, effortPayload } = await jiti.import("./index.ts");
 const { convertToLlm } = await jiti.import("@earendil-works/pi-coding-agent");
 const { createAssistantMessageEventStream } = await import(pathToFileURL(piAi));
 // Never read or write the developer's settings.
@@ -33,7 +33,7 @@ const usage = { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, totalToken
 const user = (text, timestamp = 1) => ({ role: "user", content: text, timestamp });
 const context = (text = "Fix a typo", timestamp = 1) => ({ systemPrompt: "PRIVATE SYSTEM INSTRUCTIONS", tools: [], messages: [user(text, timestamp)] });
 
-async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = false, incomplete = false, auth, history = [], sessionId = "main" } = {}) {
+async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = false, incomplete = false, auth, history = [], sessionId = "main", responsesPayload = false } = {}) {
 	const handlers = new Map();
 	const commands = new Map();
 	const calls = [], entries = structuredClone(history), notices = [];
@@ -54,7 +54,16 @@ async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = 
 				...(backendError ? { errorMessage: "Backend failure" } : {}),
 			};
 			void (async () => {
-				const payload = await options.onPayload?.({ model: model.id }, model);
+				const body = responsesPayload ? { model: model.id, reasoning: { effort: options.reasoning }, input: ctx.messages.map((message) => ({ role: message.role, content: message.content })) } : { model: model.id };
+				let payload;
+				try { payload = await options.onPayload?.(body, model); }
+				catch (error) {
+					message.stopReason = "error";
+					message.errorMessage = error.message;
+					output.push({ type: "error", reason: "error", error: message });
+					output.end(message);
+					return;
+				}
 				calls.push({ model, context: ctx, options, message, payload });
 				output.push({ type: "start", partial: message });
 				output.push({ type: "toolcall_end", contentIndex: 0, toolCall: message.content[0], partial: message });
@@ -82,6 +91,7 @@ async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = 
 		sessionManager: {
 			getSessionId: () => sessionId,
 			getEntries: () => entries.map(({ name, data }) => ({ type: "custom", customType: name, data })),
+			getBranch: () => entries.map(({ name, data }) => ({ type: "custom", customType: name, data })),
 			buildContextEntries: () => entries.map(({ name, data }) => ({ type: "custom", customType: name, data })),
 		},
 		ui: { setStatus() {}, notify: (...args) => notices.push(args) },
@@ -118,6 +128,7 @@ function mockGateway(t, respond = () => FAST) {
 		requests.push(body);
 		const result = await respond(options, body);
 		if (result instanceof Response) return result;
+		if (body.questions.effort) return Response.json({ answers: { effort: { type: "choice", choice: typeof result === "string" ? result : result.thinking } }, usage: { inputTokens: 1000, outputTokens: 0 } });
 		const desired = typeof result === "string" ? { target: result } : result;
 		const choice = Object.entries(body.questions.route.criteria).find(([, profile]) =>
 			profile.model === desired.target && (desired.thinking === undefined || profile.thinking === desired.thinking))?.[0] ?? "unoffered-profile";
@@ -428,6 +439,258 @@ test("Jev chooses automatic effort once, and pins it across messages and auxilia
 	await fork.stream(context("Harder task", 5)).result();
 	assert.equal(fork.calls[0].options.reasoning, "high");
 	assert.equal(requests.length, 2);
+});
+
+test("adaptive Astra effort changes on tool continuations, preserving the initial effort and update history", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: { minThinking: "medium", options: {
+		[DEEP]: { description: "Deep work", thinking: "auto", adaptiveThinking: true },
+	}, fallback: DEEP } }));
+	let thinking = "medium";
+	const requests = mockGateway(t, () => ({ target: DEEP, thinking }));
+	const h = await harness({ refs: [DEEP], responsesPayload: true });
+	const input = context("Fix the failure");
+	await h.stream(input).result();
+	const initial = h.calls[0].payload;
+	assert.equal(requests.length, 1, "initial routing already chooses effort");
+	input.messages.push(h.calls[0].message, { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: true, content: [{ type: "text", text: "Unresolved failure" }], timestamp: 3 });
+	thinking = "high";
+	await h.stream(input).result();
+	const high = h.calls[1].payload;
+	assert.equal(high.reasoning.effort, "medium");
+	assert.deepEqual(high.input.slice(0, initial.input.length), initial.input);
+	assert.deepEqual(high.input.at(-1), { type: "configuration_update", reasoning: { effort: "high" } });
+	assert.deepEqual(Object.keys(requests[1].questions.effort.criteria), ["medium", "high", "xhigh", "max"]);
+	assert.equal(requests[1].state.recent.at(-1).isError, true);
+	assert.equal(requests[1].state.recent.at(-1).text, "Unresolved failure");
+	const historicalAuxiliary = await harness({ refs: [DEEP], responsesPayload: true, history: h.entries });
+	await historicalAuxiliary.stream(context("Fix the failure"), { sessionId: "compaction" }).result();
+	assert.equal(historicalAuxiliary.calls[0].payload.input.at(-1).reasoning.effort, "high", "auxiliary calls use current effort, even when their context matches an earlier decision");
+	assert.equal(historicalAuxiliary.entries.length, h.entries.length);
+	assert.equal(requests.length, 2);
+	input.messages.push(h.calls[1].message, { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: false, content: [{ type: "text", text: "Fixed, all checks pass" }], timestamp: 4 });
+	thinking = "medium";
+	await h.stream(input).result();
+	const medium = h.calls[2].payload;
+	assert.equal(medium.reasoning.effort, "medium");
+	assert.deepEqual(medium.input.slice(0, high.input.length), high.input, "the whole earlier payload prefix is unchanged");
+	assert.deepEqual(medium.input.at(-1), { type: "configuration_update", reasoning: { effort: "medium" } });
+	assert.equal(requests.length, 3);
+	assert.equal(h.entries.filter((entry) => entry.name === "jev-pin").length, 1);
+	const resumed = await harness({ refs: [DEEP], responsesPayload: true, history: h.entries });
+	await resumed.stream(input).result();
+	assert.deepEqual(resumed.calls[0].payload, medium);
+	assert.equal(requests.length, 3, "retry/reload does not reevaluate the same step");
+	const before = resumed.entries.length;
+	await resumed.stream(input, { sessionId: "compaction" }).result();
+	assert.equal(requests.length, 3, "auxiliary calls do not evaluate effort");
+	assert.equal(resumed.entries.length, before, "auxiliary calls do not record changes");
+	await resumed.commands.get("jev").handler("", resumed.ctx);
+	assert.match(resumed.notices.at(-1)[0], /thinking medium \(initial medium\)/);
+	assert.match(resumed.notices.at(-1)[0], /adaptive/);
+});
+
+test("Astra updates rebase after compaction, follow branch state, and remain replayed when adaptation is disabled", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	const config = { options: { [DEEP]: { description: "Deep", thinking: "auto", adaptiveThinking: true } }, fallback: DEEP, monitor: false };
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const requests = mockGateway(t, () => "high");
+	const history = [{ name: "jev-pin", data: { target: DEEP, thinking: "medium", sessionId: "main" } }];
+	const h = await harness({ refs: [DEEP], responsesPayload: true, history });
+	await h.stream(context("Failed again")).result();
+	assert.equal(h.calls[0].payload.input.at(-1).reasoning.effort, "high");
+	config.options[DEEP].adaptiveThinking = false;
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const resumed = await harness({ refs: [DEEP], responsesPayload: true, history: h.entries });
+	await resumed.stream(context("Compacted history", 7)).result();
+	assert.equal(resumed.calls[0].payload.reasoning.effort, "medium");
+	assert.equal(resumed.calls[0].payload.input.filter((item) => item.type === "configuration_update").length, 1);
+	assert.equal(resumed.calls[0].payload.input.at(-1).reasoning.effort, "high");
+	assert.equal(requests.length, 1);
+	let status;
+	resumed.ctx.ui.setStatus = (_key, value) => { status = value; };
+	await resumed.handlers.get("session_tree")({}, resumed.ctx);
+	assert.match(status, /high/);
+	resumed.ctx.sessionManager.getBranch = () => [];
+	await resumed.handlers.get("session_tree")({}, resumed.ctx);
+	assert.match(status, /medium/, "branch navigation refreshes effort before the next request");
+	await resumed.stream(context("Earlier branch", 8)).result();
+	assert.equal(resumed.calls[1].options.reasoning, "medium");
+	assert.equal(resumed.calls[1].payload, undefined, "an abandoned branch's effort must not leak into requests");
+});
+
+test("adaptive effort failure and invalid choices retain current effort without sending private reasoning or tool arguments", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: { minThinking: "medium", options: { [DEEP]: { description: "Deep", thinking: "auto", adaptiveThinking: true } }, fallback: DEEP } }));
+	const requests = mockGateway(t, () => "low");
+	const history = [{ name: "jev-pin", data: { target: DEEP, thinking: "high", sessionId: "main" } }];
+	const h = await harness({ refs: [DEEP], responsesPayload: true, history });
+	const input = context();
+	input.messages.push({ role: "assistant", content: [{ type: "thinking", thinking: "PRIVATE REASONING" }, { type: "toolCall", id: "x", name: "read", arguments: { path: "PRIVATE ARGUMENT" } }], timestamp: 2 });
+	await h.stream(input).result();
+	assert.equal(h.calls[0].payload.reasoning.effort, "high");
+	assert.equal(h.calls[0].payload.input.filter((item) => item.type === "configuration_update").length, 0);
+	assert.doesNotMatch(JSON.stringify(requests[0]), /PRIVATE/);
+	assert.match(h.notices.at(-1)[0], /Keeping the current effort/);
+	const missing = await harness({ refs: [DEEP], responsesPayload: true, history, gatewayKey: false });
+	await missing.stream().result();
+	assert.equal(missing.calls[0].payload.reasoning.effort, "high");
+	const controller = new AbortController();
+	controller.abort();
+	await h.stream(context("Cancelled", 3), { signal: controller.signal }).result();
+	assert.equal(h.calls.length, 1);
+});
+
+test("adaptive effort cancellation saves no decision and timeout keeps the existing effort", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: { timeoutMs: 20, options: { [DEEP]: { description: "Deep", thinking: "auto", adaptiveThinking: true } }, fallback: DEEP } }));
+	const started = Promise.withResolvers();
+	mockGateway(t, (options) => new Promise((_resolve, reject) => {
+		started.resolve();
+		options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+	}));
+	const history = [{ name: "jev-pin", data: { target: DEEP, thinking: "medium", sessionId: "main" } }];
+	const h = await harness({ refs: [DEEP], responsesPayload: true, history });
+	const controller = new AbortController();
+	const result = h.stream(context(), { signal: controller.signal }).result();
+	await started.promise;
+	controller.abort();
+	assert.equal((await result).stopReason, "aborted");
+	assert.equal(h.entries.length, 1);
+	assert.equal(h.calls.length, 0);
+	const keepAlive = setInterval(() => {}, 50);
+	try {
+		await h.stream().result();
+		assert.equal(h.calls[0].payload.reasoning.effort, "medium");
+		assert.match(h.notices.at(-1)[0], /Keeping the current effort/);
+	} finally { clearInterval(keepAlive); }
+});
+
+test("effort payload preserves headers/settings, rejects incompatible modes, and maps provider effort names", () => {
+	const body = { input: [{ role: "user", content: "Task" }], reasoning: { effort: "high", summary: "auto" }, prompt_cache_key: "session", tools: [] };
+	const high = effortPayload(body, [], "high", "medium");
+	assert.equal(high.payload.reasoning.effort, "medium");
+	assert.equal(high.payload.reasoning.summary, "auto");
+	assert.equal(high.payload.prompt_cache_key, "session");
+	assert.equal(body.input.length, 1, "do not mutate the original payload");
+	const entries = [{ thinking: "high", update: high.update }];
+	const down = effortPayload(body, entries, "medium", "medium");
+	assert.equal(down.payload.input.filter((item) => item.type === "configuration_update").length, 1, "same-boundary changes cannot produce adjacent updates");
+	assert.equal(down.payload.input.at(-1).reasoning.effort, "medium");
+	assert.equal(effortPayload(body, [], "minimal", "medium", { minimal: "low" }).payload.input.at(-1).reasoning.effort, "low");
+	for (const extra of [{ truncation: "auto" }, { context_management: [] }, { input: [{ type: "configuration_update" }] }]) {
+		assert.throws(() => effortPayload({ ...body, ...extra }, [], "high", "medium"), /Astra/);
+	}
+	assert.throws(() => effortPayload({}, [], "high", "medium"), /Responses/);
+	for (const adaptiveThinking of [null, "true", 1]) assert.throws(() => parseConfig({ options: { [DEEP]: { description: "Deep", thinking: "auto", adaptiveThinking } }, fallback: DEEP }), /adaptiveThinking/);
+	for (const [target, thinking] of [[FAST, "auto"], [DEEP, "high"], [DEEP, undefined]]) {
+		assert.throws(() => parseConfig({ options: { [target]: { description: "Task", thinking, adaptiveThinking: true } }, fallback: target }), /adaptiveThinking/);
+	}
+});
+
+test("global and model thinking floors constrain routing, monitoring, and fallback without rewriting pins", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	const config = { minThinking: "medium", options: {
+		[FAST]: { description: "Routine", thinking: "auto", minThinking: "high" },
+		[DEEP]: { description: "Deep", thinking: "auto" },
+	}, fallback: DEEP };
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	let desired = { target: FAST, thinking: "high" };
+	const requests = mockGateway(t, () => desired);
+	const h = await harness();
+	await h.stream().result();
+	assert.equal(h.calls[0].options.reasoning, "high");
+	assert.deepEqual(Object.values(requests[0].questions.route.criteria).map(({ model, thinking }) => [model, thinking]),
+		[[FAST, "high"], [FAST, "xhigh"], [FAST, "max"], [DEEP, "medium"], [DEEP, "high"], [DEEP, "xhigh"], [DEEP, "max"]]);
+	await h.commands.get("jev").handler("", h.ctx);
+	assert.match(h.notices.at(-1)[0], /Global minimum thinking: medium/);
+	assert.match(h.notices.at(-1)[0], /model minimum high/);
+	desired = { target: DEEP, thinking: "medium" };
+	await h.stream(context("Hard task", 3)).result();
+	assert.equal(h.calls.at(-1).options.reasoning, "high");
+	assert.equal(h.entries.find((entry) => entry.name === "jev-suggestion").data.thinking, "medium");
+	const fallback = await harness({ gatewayKey: false });
+	await fallback.stream().result();
+	assert.equal(fallback.calls[0].options.reasoning, "max");
+	const auxiliary = await harness();
+	await auxiliary.stream(context(), { sessionId: "compaction" }).result();
+	assert.equal(auxiliary.calls[0].options.reasoning, "max");
+	config.minThinking = "max";
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const resumed = await harness({ history: h.entries });
+	await resumed.stream(context("Continue", 4)).result();
+	assert.equal(resumed.calls[0].options.reasoning, "high", "new floors do not change saved pins");
+});
+
+test("only Codex Astra can override the global floor for initial routing and adaptive effort", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: { minThinking: "medium", options: {
+		[FAST]: { description: "Routine", thinking: "auto", minThinking: "low" },
+		[DEEP]: { description: "Deep", thinking: "auto", minThinking: "low", adaptiveThinking: true },
+	}, fallback: DEEP } }));
+	let thinking = "high";
+	const requests = mockGateway(t, () => ({ target: DEEP, thinking }));
+	const h = await harness({ responsesPayload: true });
+	const input = context();
+	await h.stream(input).result();
+	const profiles = Object.values(requests[0].questions.route.criteria);
+	assert.deepEqual(profiles.filter((profile) => profile.model === DEEP).map((profile) => profile.thinking), ["low", "medium", "high", "xhigh", "max"]);
+	assert.deepEqual(profiles.filter((profile) => profile.model === FAST).map((profile) => profile.thinking), ["medium", "high", "xhigh", "max"]);
+	input.messages.push(h.calls[0].message, { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: false, content: [{ type: "text", text: "Ready for routine follow-through" }], timestamp: 3 });
+	thinking = "low";
+	await h.stream(input).result();
+	assert.deepEqual(Object.keys(requests[1].questions.effort.criteria), ["low", "medium", "high", "xhigh", "max"]);
+	assert.equal(h.calls[1].payload.reasoning.effort, "high", "the initial request effort stays fixed for caching");
+	assert.equal(h.calls[1].payload.input.at(-1).reasoning.effort, "low");
+	const initialLow = await harness({ responsesPayload: true });
+	await initialLow.stream().result();
+	assert.equal(initialLow.calls[0].options.reasoning, "low");
+});
+
+test("thinking floors raise fixed and inherited effort, respect capability gaps and custom choices, and never clamp below the floor", async (t) => {
+	t.after(() => rmSync(settingsPath, { force: true }));
+	const route = { description: "Routine", minThinking: "low" };
+	const config = { minThinking: "medium", options: { [FAST]: route }, fallback: FAST };
+	for (const thinking of [undefined, "low"]) {
+		route.thinking = thinking;
+		writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+		const h = await harness({ refs: [FAST] });
+		h.models[0].thinkingLevelMap.medium = null;
+		await h.stream(context(), { reasoning: "off" }).result();
+		assert.equal(h.calls[0].options.reasoning, "high", "a lower model floor cannot weaken the global floor");
+	}
+	route.thinking = { low: "Simple", high: "Complex" };
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const custom = await harness({ refs: [FAST] });
+	await custom.stream().result();
+	assert.equal(custom.calls[0].options.reasoning, "high");
+	config.minThinking = "max";
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const excluded = await harness({ refs: [FAST] });
+	assert.match((await excluded.stream().result()).errorMessage, /configured thinking choices and minimums/);
+	assert.equal(excluded.calls.length, 0, "custom choices must not be expanded to satisfy the floor");
+	route.thinking = "auto";
+	config.options[DEEP] = { description: "Deep", thinking: "auto" };
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const unsupported = await harness({ gatewayKey: false });
+	unsupported.models[0].reasoning = false;
+	unsupported.models[1].thinkingLevelMap.max = null;
+	assert.match((await unsupported.stream().result()).errorMessage, /configured thinking choices and minimums/);
+	assert.equal(unsupported.calls.length, 0);
+	config.minThinking = "high";
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	const badFallback = await harness({ gatewayKey: false });
+	badFallback.models[0].reasoning = false;
+	assert.match((await badFallback.stream().result()).errorMessage, /fallback .* thinking policy/);
+	assert.equal(badFallback.calls.length, 0);
+});
+
+test("thinking floors accept only named levels", () => {
+	for (const minThinking of [null, "auto", "turbo", 3, {}, []]) {
+		assert.throws(() => parseConfig({ options: { [FAST]: { description: "Routine" } }, fallback: FAST, minThinking }), /minThinking/);
+		assert.throws(() => parseConfig({ options: { [FAST]: { description: "Routine", minThinking } }, fallback: FAST }), /minThinking/);
+	}
+	assert.equal(parseConfig({ options: { [FAST]: { description: "Routine", minThinking: "high" } }, fallback: FAST, minThinking: "medium" }).options[FAST].minThinking, "high");
 });
 
 test("custom effort choices filter unsupported levels while fixed levels override Pi thinking", async (t) => {
