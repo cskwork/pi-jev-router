@@ -13,7 +13,7 @@
       },
       "anthropic/claude-opus-5": {
         "description": "Ambiguous requirements, architecture, difficult debugging, security-sensitive changes, adversarial review, and interpreting conflicting QA or verification evidence.",
-        "thinking": "medium"
+        "thinking": "high"
       },
       "zai/glm-5.3": {
         "description": "General software development, documentation, and verification with clear requirements. Also available when Claude usage is exhausted.",
@@ -25,7 +25,7 @@
       },
       "openai-codex/gpt-6-astra": {
         "description": "Architecture and planning: system design, implementation plans, ambiguous requirements, and difficult cross-service debugging on the OpenAI side. Counterpart to Claude Opus.",
-        "thinking": "medium"
+        "thinking": "high"
       },
       "openai-codex/gpt-5.6-terra": {
         "description": "Routine web development: implement a clear plan using existing components and API patterns, fix localized bugs, and add focused regression coverage.",
@@ -37,7 +37,7 @@
       }
     },
     "fallback": "anthropic/claude-sonnet-5",
-    "rateLimitFallback": "zai/glm-5.3",
+    "rateLimitFallback": "openai-codex/gpt-5.6-sol",
     "monitor": false,
     "skills": false
   }

@@ -72,13 +72,15 @@ Merge `jevRouter` into **global** `~/.pi/agent/settings.json`, then `/reload`:
 }
 ```
 
-Only listed, authenticated models are eligible; `fallback` must be listed too. Routes replace the default list; they aren't merged. `PI_CODING_AGENT_DIR` is respected; project settings cannot override routing.
+Only listed, authenticated models are eligible; `fallback` and `rateLimitFallback` must be listed and authenticated too. Unauthenticated models are dropped silently, so check the live candidates with `/jev`. Routes replace the default list; they aren't merged. `PI_CODING_AGENT_DIR` is respected; project settings cannot override routing.
 
-Without configuration, the web-development preset below is used: Jev-first classification, Claude models at medium effort, Sonnet fallback, GLM usage-limit fallback, a five-second timeout, and monitoring/skill selection off. The custom example above replaces that preset with Codex routes and automatic effort.
+Without configuration, the web-development preset below is used: Jev-first classification, Claude models with Opus at high effort and the rest at medium, Sonnet fallback, Sol usage-limit fallback, a five-second timeout, and monitoring/skill selection off. The custom example above replaces that preset with Codex routes and automatic effort.
+
+Descriptions accept either a nonempty string or a structured rubric with `role`, `use_when`, `not_for`, and `boundary`. The role and boundary must be nonempty strings; both lists must contain nonempty strings. Structured rubrics are passed intact as each Choice option's `task`, including during monitoring. Jev chooses the model by task fit first, then the lowest sufficient effort within that model. High effort never expands a model's scope, and a lower effort label on another model is not a reason to prefer it.
 
 ### Web development with Claude, Codex, and SDLC Kit
 
-Merge [examples/web-development.json](examples/web-development.json) into your global settings. It uses existing Pi providers, with `medium` thinking for each route:
+Merge [examples/web-development.json](examples/web-development.json) into your global settings. It uses existing Pi providers, with `high` thinking for Opus and Astra and `medium` for the other routes:
 
 | Model | Task description offered to Jev |
 | --- | --- |
@@ -89,7 +91,7 @@ Merge [examples/web-development.json](examples/web-development.json) into your g
 | `openai-codex/gpt-5.6-terra` | Planned web features, localized fixes, and regression coverage. |
 | `openai-codex/gpt-5.6-sol` | Multi-component implementation, debugging, review, and interpreting QA evidence. |
 | `openai-codex/gpt-6-astra` | Architecture and planning: system design, implementation plans, ambiguous requirements, and difficult debugging on the OpenAI side. |
-| `zai/glm-5.3` | Usage-limit fallback for either family. |
+| `zai/glm-5.3` | General development, documentation, and verification with clear requirements when zai is authenticated. |
 
 These are editable task descriptions, not model benchmarks or guaranteed classifications. Use exact model IDs available in your Pi `/model` picker. Only authenticated models are offered. Choose another allowed fallback if you do not use Z.ai.
 
@@ -118,7 +120,7 @@ There is no fallback after partial output, on cancellation, for auxiliary reques
 | `{"low": "Small changes", "high": "Hard problems"}` | Customize the allowed choices and their descriptions. |
 | Omitted | Inherit Pi's thinking level when the pin is created. |
 
-Levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Automatic choices are filtered to supported levels. Model and effort are chosen together, not in separate evaluations.
+Levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Automatic choices are filtered to supported levels. Model and effort are chosen in one evaluation: task fit determines the model first, then Jev selects the lowest sufficient allowed effort within that model. Effort labels are model-relative; another model's lower label does not make it a better fit. A configured floor can intentionally exceed what a routine task needs.
 
 Set `jevRouter.minThinking` for a global floor, and `minThinking` inside a model's option for a stricter per-model floor. For example, global `"medium"` plus Luna `"high"` lets Jev choose medium or higher for Astra and high or higher for Luna when both use `"thinking": "auto"`. An omitted model minimum inherits the global floor. Only `openai-codex/gpt-6-astra` can override it: an explicit Astra `"minThinking": "low"` permits low effort even with global `"medium"`, for both initial routing and adaptive effort. Other models can only raise the global floor. Both fields are optional and default to no additional restriction.
 

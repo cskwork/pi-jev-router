@@ -600,6 +600,27 @@ test("effort payload preserves headers/settings, rejects incompatible modes, and
 	}
 });
 
+test("structured three-model criteria survive routing and monitoring", async (t) => {
+	const middle = "openai-codex/gpt-5.6-sol";
+	const rubric = { role: "Executor", use_when: ["Known approach"], not_for: ["Architecture"], boundary: "Execute rather than advise" };
+	const config = { options: Object.fromEntries([FAST, middle, DEEP].map(ref => [ref, { description: rubric, thinking: "auto" }])), fallback: DEEP };
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: config }));
+	t.after(() => rmSync(settingsPath, { force: true }));
+	const requests = mockGateway(t, () => ({ target: middle, thinking: "medium" }));
+	const h = await harness({ refs: [FAST, middle, DEEP] });
+	await h.stream().result();
+	assert.equal(h.calls[0].model.id, "gpt-5.6-sol");
+	assert.deepEqual(new Set(Object.values(requests[0].questions.route.criteria).map(p => p.model)), new Set([FAST, middle, DEEP]));
+	await h.stream(context("Next task", 3)).result();
+	for (const request of requests) {
+		for (const profile of Object.values(request.questions.route.criteria)) assert.deepEqual(profile.task, rubric);
+		assert.match(request.questions.route.instructions, /High effort does not expand/);
+	}
+	for (const description of [{}, { ...rubric, use_when: [] }, { ...rubric, not_for: [1] }, { ...rubric, boundary: "" }]) {
+		assert.throws(() => parseConfig({ ...config, options: { [DEEP]: { description } } }), /Invalid Jev route/);
+	}
+});
+
 test("global and model thinking floors constrain routing, monitoring, and fallback without rewriting pins", async (t) => {
 	t.after(() => rmSync(settingsPath, { force: true }));
 	const config = { minThinking: "medium", options: {
@@ -612,6 +633,10 @@ test("global and model thinking floors constrain routing, monitoring, and fallba
 	const h = await harness();
 	await h.stream().result();
 	assert.equal(h.calls[0].options.reasoning, "high");
+	assert.equal(requests.length, 1, "model and effort still use one evaluation");
+	assert.match(requests[0].questions.route.instructions, /model by task fit.*first/);
+	assert.match(requests[0].questions.route.instructions, /Effort levels are model-relative/);
+	assert.match(requests[0].questions.route.instructions, /configured effort floor may exceed/);
 	assert.deepEqual(Object.values(requests[0].questions.route.criteria).map(({ model, thinking }) => [model, thinking]),
 		[[FAST, "high"], [FAST, "xhigh"], [FAST, "max"], [DEEP, "medium"], [DEEP, "high"], [DEEP, "xhigh"], [DEEP, "max"]]);
 	await h.commands.get("jev").handler("", h.ctx);
@@ -621,6 +646,8 @@ test("global and model thinking floors constrain routing, monitoring, and fallba
 	await h.stream(context("Hard task", 3)).result();
 	assert.equal(h.calls.at(-1).options.reasoning, "high");
 	assert.equal(h.entries.find((entry) => entry.name === "jev-suggestion").data.thinking, "medium");
+	assert.match(requests[1].questions.route.instructions, /task fit first/);
+	assert.match(requests[1].questions.route.instructions, /not a reason to fork/);
 	const fallback = await harness({ gatewayKey: false });
 	await fallback.stream().result();
 	assert.equal(fallback.calls[0].options.reasoning, "max");
@@ -1269,18 +1296,27 @@ function configureWeb(t, overrides = {}) {
 	return config.jevRouter;
 }
 
-test("web preset routes Claude and Codex families with medium effort and no workflow hooks", async (t) => {
+test("web preset model IDs exist in Pi's model registry", async () => {
+	const { getModels } = await jiti.import("@earendil-works/pi-ai");
+	const config = JSON.parse(readFileSync(new URL("./examples/web-development.json", import.meta.url), "utf8")).jevRouter;
+	for (const ref of new Set([...Object.keys(config.options), config.fallback, config.rateLimitFallback])) {
+		const [provider, id] = [ref.slice(0, ref.indexOf("/")), ref.slice(ref.indexOf("/") + 1)];
+		assert.ok(getModels(provider).some((model) => model.id === id), `${ref} is not a registered Pi model`);
+	}
+});
+
+test("web preset routes Claude and Codex families with configured effort and no workflow hooks", async (t) => {
 	let selected = CLAUDE[0];
 	const requests = mockGateway(t, () => selected);
 	for (const [provider, refs] of [["anthropic", CLAUDE], ["openai", CODEX]]) {
-		configureWeb(t, { provider });
+		const config = configureWeb(t, { provider });
 		for (const ref of refs) {
 			selected = ref;
 			const h = await harness({ refs: WEB_MODELS });
 			const result = await h.stream(context("Perform the requested SDLC task")).result();
 			assert.equal(`${result.provider}/${result.model}`, ref);
 			assert.equal(result.api, provider === "anthropic" ? "anthropic-messages" : "openai-codex-responses");
-			assert.equal(h.calls[0].options.reasoning, "medium");
+			assert.equal(h.calls[0].options.reasoning, config.options[ref].thinking);
 			assert.ok(!h.handlers.has("tool_call"), "router does not approve or execute SDLC gates");
 			assert.deepEqual(new Set(Object.values(requests.at(-1).questions.route.criteria).map(p => p.model)), new Set(refs));
 		}
@@ -1323,7 +1359,7 @@ test("an omitted provider keeps cross-provider routing compatible", async (t) =>
 });
 
 test("rate-limit fallback retries once with its own auth, then persists the successful pin", async (t) => {
-	configureWeb(t);
+	configureWeb(t, { rateLimitFallback: GLM });
 	const requests = mockGateway(t, () => CLAUDE[2]);
 	for (const error of ['429 rate_limit_error', '400 You\'re out of extra usage.']) {
 		const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: error },
@@ -1353,7 +1389,7 @@ test("rate-limit fallback retries once with its own auth, then persists the succ
 });
 
 test("fallback is opt-in, never replays partial output, and leaves other failures explicit", async (t) => {
-	configureWeb(t);
+	configureWeb(t, { rateLimitFallback: GLM });
 	mockGateway(t, () => CLAUDE[2]);
 	for (const [error, partialFailure] of [["429 rate limit", true], ["401 unauthorized", false], ["500 unavailable", false]]) {
 		const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: error }, partialFailure });
@@ -1367,7 +1403,7 @@ test("fallback is opt-in, never replays partial output, and leaves other failure
 });
 
 test("failed fallback retains the original pin and cannot loop", async (t) => {
-	configureWeb(t);
+	configureWeb(t, { rateLimitFallback: GLM });
 	mockGateway(t, () => CLAUDE[2]);
 	const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429", [GLM]: "429" } });
 	assert.equal((await h.stream().result()).stopReason, "error");
@@ -1381,7 +1417,7 @@ test("failed fallback retains the original pin and cannot loop", async (t) => {
 });
 
 test("fallback respects availability, images, thinking policy, cancellation, and auxiliary boundaries", async (t) => {
-	const config = configureWeb(t);
+	const config = configureWeb(t, { rateLimitFallback: GLM });
 	mockGateway(t, () => CLAUDE[2]);
 	const unavailable = await harness({ refs: CLAUDE, failures: { [CLAUDE[2]]: "429" } });
 	assert.equal((await unavailable.stream().result()).stopReason, "error");
@@ -1392,11 +1428,11 @@ test("fallback respects availability, images, thinking policy, cancellation, and
 	input.messages[0].content = [{ type: "text", text: "Review screenshot" }, { type: "image", data: "test", mimeType: "image/png" }];
 	assert.equal((await images.stream(input).result()).stopReason, "error");
 	assert.equal(images.calls.length, 1);
-	configureWeb(t, { minThinking: "high", options: { ...config.options, [GLM]: { description: "x", thinking: { low: "low only" } } } });
+	configureWeb(t, { rateLimitFallback: GLM, minThinking: "high", options: { ...config.options, [GLM]: { description: "x", thinking: { low: "low only" } } } });
 	const policy = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429" } });
 	assert.equal((await policy.stream().result()).stopReason, "error");
 	assert.equal(policy.calls.length, 1);
-	configureWeb(t);
+	configureWeb(t, { rateLimitFallback: GLM });
 	const stop = new AbortController();
 	const cancelled = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429" }, auth: async model => {
 		if (model.provider === "zai") stop.abort();

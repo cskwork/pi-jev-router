@@ -46,7 +46,7 @@ pi
 <p>설정 파일을 선호하면 <code>jevRouter</code> 안에 <code>&quot;typesafeApiKey&quot;: &quot;your-key&quot;</code>를 추가하고 <code>/reload</code>하세요. 키는 비공개 설정에만 저장하고 Git에 커밋하지 마세요. 환경 변수를 변경했다면 해당 터미널에서 Pi를 다시 시작해야 합니다.</p>
 <p>직접 호출은 <a href="https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai">공식 AI SDK TypeSafe 제공자</a>의 <code>jev-latest</code>를 사용합니다. <a href="https://docs.typesafe.ai/api">TypeSafe API</a> 키는 모델 생성 제공자, <code>/jev</code> 출력, 세션의 라우팅 기록에 전달하지 않습니다. 잘못된 키가 설정되어 있으면 오류를 알리고 생성용 기본 모델을 사용합니다. 인증 오류를 숨기며 다른 분류기로 재시도하지 않습니다.</p>
 <h2>Claude / OpenAI 선택</h2>
-<p><a href="https://github.com/cskwork/pi-jev-router/blob/main/examples/web-development.json">전체 웹 개발 설정</a>을 전역 설정에 합치세요. 예시는 Claude를 기본 계열로 선택하고 모든 모델의 추론 수준을 <code>medium</code>으로 설정합니다.</p>
+<p><a href="https://github.com/cskwork/pi-jev-router/blob/main/examples/web-development.json">전체 웹 개발 설정</a>을 전역 설정에 합치세요. 예시는 Claude를 기본 계열로 선택하고, Opus와 Astra는 <code>high</code>, 나머지 모델은 <code>medium</code>으로 추론 수준을 고정합니다.</p>
 <pre><code class="language-json">{
   &quot;jevRouter&quot;: {
     &quot;classifier&quot;: &quot;jev&quot;,
@@ -110,10 +110,11 @@ pi
 </tr>
 <tr>
 <td>GLM 5.3</td>
-<td>사용량 제한 시 대체 모델</td>
+<td>zai 인증이 있을 때 명확한 요구사항의 일반 개발, 문서, 검증</td>
 </tr>
 </tbody></table>
-<p>작업 설명은 수정할 수 있으며 성능 순위를 보장하지 않습니다. Pi에 등록되고 인증된 정확한 모델 ID를 사용하세요. <code>options</code>는 기본 목록을 통째로 대체합니다. <code>fallback</code>과 <code>rateLimitFallback</code>도 <code>options</code>에 등록해야 합니다.</p>
+<p>작업 설명은 수정할 수 있으며 성능 순위를 보장하지 않습니다. Pi에 등록되고 인증된 정확한 모델 ID를 사용하세요. <code>options</code>는 기본 목록을 통째로 대체합니다. <code>fallback</code>과 <code>rateLimitFallback</code>도 <code>options</code>에 등록해야 하며 Pi에 인증된 모델이어야 합니다. 인증되지 않은 모델은 오류 없이 후보에서 빠지므로 <code>/jev</code>로 실제 후보를 확인하세요.</p>
+<p>작업 설명은 문자열 대신 <code>role</code>, <code>use_when</code>, <code>not_for</code>, <code>boundary</code>로 이루어진 구조화된 기준으로도 쓸 수 있습니다. <code>role</code>과 <code>boundary</code>는 비어 있지 않은 문자열, 두 목록은 비어 있지 않은 문자열 배열이어야 합니다. 구조화된 기준은 모니터링을 포함해 분류기에 그대로 전달됩니다. 분류기는 작업 적합성으로 모델을 먼저 고른 뒤 그 모델 안에서 충분한 최저 추론 수준을 고릅니다. 높은 추론 수준이 모델의 역할 범위를 넓히지는 않으며, 다른 모델의 낮은 수준 표시가 그 모델을 선호할 이유가 되지 않습니다.</p>
 <p>분류가 실패하면 선택한 계열의 <code>fallback</code>을 사용합니다. <code>fallback</code>이 다른 계열에 속하면 설정 파일의 순서상 첫 번째 사용 가능한 모델을 선택합니다. 전체 예시에서는 Claude의 기본 모델이 Sonnet, OpenAI의 기본 모델이 Sol입니다. 후보가 없으면 명시적으로 실패합니다.</p>
 <h2>로컬 Laya multilingual</h2>
 <p>클라우드 키가 없으면 로컬 분류를 시도합니다. 키가 있어도 <code>&quot;classifier&quot;: &quot;local&quot;</code>을 설정하면 로컬만 사용합니다. 기본 주소는 <code>http://127.0.0.1:8765/v1</code>이며 <code>localUrl</code>로 변경할 수 있습니다. 루프백 HTTP 주소만 허용하고 리다이렉트는 거부합니다.</p>
@@ -278,10 +279,11 @@ pi
   }
 }
 </code></pre>
-<p>Only listed, authenticated models are eligible; <code>fallback</code> must be listed too. Routes replace the default list; they aren&#39;t merged. <code>PI_CODING_AGENT_DIR</code> is respected; project settings cannot override routing.</p>
-<p>Without configuration, the web-development preset below is used: Jev-first classification, Claude models at medium effort, Sonnet fallback, GLM usage-limit fallback, a five-second timeout, and monitoring/skill selection off. The custom example above replaces that preset with Codex routes and automatic effort.</p>
+<p>Only listed, authenticated models are eligible; <code>fallback</code> and <code>rateLimitFallback</code> must be listed and authenticated too. Unauthenticated models are dropped silently, so check the live candidates with <code>/jev</code>. Routes replace the default list; they aren&#39;t merged. <code>PI_CODING_AGENT_DIR</code> is respected; project settings cannot override routing.</p>
+<p>Without configuration, the web-development preset below is used: Jev-first classification, Claude models with Opus at high effort and the rest at medium, Sonnet fallback, Sol usage-limit fallback, a five-second timeout, and monitoring/skill selection off. The custom example above replaces that preset with Codex routes and automatic effort.</p>
+<p>Descriptions accept either a nonempty string or a structured rubric with <code>role</code>, <code>use_when</code>, <code>not_for</code>, and <code>boundary</code>. The role and boundary must be nonempty strings; both lists must contain nonempty strings. Structured rubrics are passed intact as each Choice option&#39;s <code>task</code>, including during monitoring. Jev chooses the model by task fit first, then the lowest sufficient effort within that model. High effort never expands a model&#39;s scope, and a lower effort label on another model is not a reason to prefer it.</p>
 <h3>Web development with Claude, Codex, and SDLC Kit</h3>
-<p>Merge <a href="https://github.com/cskwork/pi-jev-router/blob/main/examples/web-development.json">examples/web-development.json</a> into your global settings. It uses existing Pi providers, with <code>medium</code> thinking for each route:</p>
+<p>Merge <a href="https://github.com/cskwork/pi-jev-router/blob/main/examples/web-development.json">examples/web-development.json</a> into your global settings. It uses existing Pi providers, with <code>high</code> thinking for Opus and Astra and <code>medium</code> for the other routes:</p>
 <table>
 <thead>
 <tr>
@@ -319,7 +321,7 @@ pi
 </tr>
 <tr>
 <td><code>zai/glm-5.3</code></td>
-<td>Usage-limit fallback for either family.</td>
+<td>General development, documentation, and verification with clear requirements when zai is authenticated.</td>
 </tr>
 </tbody></table>
 <p>These are editable task descriptions, not model benchmarks or guaranteed classifications. Use exact model IDs available in your Pi <code>/model</code> picker. Only authenticated models are offered. Choose another allowed fallback if you do not use Z.ai.</p>
@@ -356,7 +358,7 @@ pi
 <td>Inherit Pi&#39;s thinking level when the pin is created.</td>
 </tr>
 </tbody></table>
-<p>Levels: <code>off</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>. Automatic choices are filtered to supported levels. Model and effort are chosen together, not in separate evaluations.</p>
+<p>Levels: <code>off</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>. Automatic choices are filtered to supported levels. Model and effort are chosen in one evaluation: task fit determines the model first, then Jev selects the lowest sufficient allowed effort within that model. Effort labels are model-relative; another model&#39;s lower label does not make it a better fit. A configured floor can intentionally exceed what a routine task needs.</p>
 <p>Set <code>jevRouter.minThinking</code> for a global floor, and <code>minThinking</code> inside a model&#39;s option for a stricter per-model floor. For example, global <code>&quot;medium&quot;</code> plus Luna <code>&quot;high&quot;</code> lets Jev choose medium or higher for Astra and high or higher for Luna when both use <code>&quot;thinking&quot;: &quot;auto&quot;</code>. An omitted model minimum inherits the global floor. Only <code>openai-codex/gpt-6-astra</code> can override it: an explicit Astra <code>&quot;minThinking&quot;: &quot;low&quot;</code> permits low effort even with global <code>&quot;medium&quot;</code>, for both initial routing and adaptive effort. Other models can only raise the global floor. Both fields are optional and default to no additional restriction.</p>
 <p>Automatic and custom choices below the floor are excluded. Fixed or inherited effort below the floor is raised to the lowest supported level meeting it. Routes with no eligible level are excluded, including non-reasoning models when the floor is above <code>off</code>; fallback errors if it has no eligible choice. <code>/jev</code> shows configured minimums. Reload after editing; existing session pins keep their original effort.</p>
 <h3>Adaptive Astra effort (opt-in)</h3>
