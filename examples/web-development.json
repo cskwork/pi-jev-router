@@ -1,0 +1,39 @@
+{
+  "jevRouter": {
+    "provider": "anthropic",
+    "options": {
+      "anthropic/claude-sonnet-5": {
+        "description": "Repository exploration, documentation, small fixes, and running established tests or browser QA scenarios with clear acceptance criteria.",
+        "thinking": "medium"
+      },
+      "anthropic/claude-fable-5-1": {
+        "description": "Web feature implementation, UI and API integration, regression tests, and multi-file changes with an agreed plan.",
+        "thinking": "medium"
+      },
+      "anthropic/claude-opus-5": {
+        "description": "Ambiguous requirements, architecture, difficult debugging, security-sensitive changes, adversarial review, and interpreting conflicting QA or verification evidence.",
+        "thinking": "medium"
+      },
+      "zai/glm-5.3": {
+        "description": "General software development, documentation, and verification with clear requirements. Also available when Claude usage is exhausted.",
+        "thinking": "medium"
+      },
+      "openai-codex/gpt-5.6-sol": {
+        "description": "Multi-component implementation, cross-service debugging, code review, and QA or verification that connects evidence across UI, API, and tests. General-purpose OpenAI default.",
+        "thinking": "medium"
+      },
+      "openai-codex/gpt-5.6-terra": {
+        "description": "Routine web development: implement a clear plan using existing components and API patterns, fix localized bugs, and add focused regression coverage.",
+        "thinking": "medium"
+      },
+      "openai-codex/gpt-5.6-luna": {
+        "description": "Quick repository searches, focused exploration, mechanical edits, formatting, and small tests with an obvious expected result. Prefer for narrow tasks with little ambiguity.",
+        "thinking": "medium"
+      }
+    },
+    "fallback": "anthropic/claude-sonnet-5",
+    "rateLimitFallback": "zai/glm-5.3",
+    "monitor": false,
+    "skills": false
+  }
+}

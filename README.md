@@ -10,17 +10,17 @@
   <a href="https://pi.dev"><img src="https://img.shields.io/badge/Pi-0.85.1%2B-f8b86d?style=flat-square" alt="Pi 0.85.1 or later"></a>
 </p>
 
-Let [TypeSafe's Jev](https://vercel.com/ai-gateway/models/jev) choose a model and reasoning effort for [Pi](https://pi.dev). The model stays fixed for the session. Effort stays fixed too, unless you enable adaptive effort for Codex Astra. Generation uses your existing Pi providers and credentials.
+Let [TypeSafe's Jev](https://vercel.com/ai-gateway/models/jev) choose a model and reasoning effort for [Pi](https://pi.dev). The model stays fixed for the session unless you enable the usage-limit fallback below. Effort stays fixed too, unless you enable adaptive effort for Codex Astra. Generation uses your existing Pi providers and credentials, including Claude Opus, Fable, and Sonnet, plus Codex Luna, Terra, and Sol.
 
 ## Get started
 
 Requires Pi **0.85.1+**, Node.js **22.19+**, and a **Vercel AI Gateway key**.
 
 ```sh
-pi install npm:pi-jev-router
+pi install git:github.com/cskwork/pi-jev-router
 ```
 
-Git also works: `pi install git:github.com/mejiasd3v/pi-jev-router`. Keep only one installation.
+This fork includes the usage-limit fallback and web-development preset. `npm:pi-jev-router` installs the upstream package. Keep only one installation.
 
 1. Use `/login` for your generation provider and `/login vercel-ai-gateway` for Jev. `AI_GATEWAY_API_KEY` also works.
 2. Run `/reload`, then `/model auto/jev`.
@@ -54,6 +54,38 @@ Merge `jevRouter` into **global** `~/.pi/agent/settings.json`, then `/reload`:
 Only listed, authenticated models are eligible; `fallback` must be listed too. Routes replace the default list; they aren't merged. `PI_CODING_AGENT_DIR` is respected; project settings cannot override routing.
 
 Without configuration, defaults are Luna/`max`, Astra/`xhigh`, Astra fallback, a five-second timeout, and monitoring on. The example above enables automatic effort.
+
+### Web development with Claude, Codex, and SDLC Kit
+
+Merge [examples/web-development.json](examples/web-development.json) into your global settings. It uses existing Pi providers, with `medium` thinking for each route:
+
+| Model | Task description offered to Jev |
+| --- | --- |
+| `anthropic/claude-sonnet-5` | Exploration, documentation, small fixes, established tests and browser QA scenarios. |
+| `anthropic/claude-fable-5-1` | Web features, UI/API integration, regression tests, and planned multi-file changes. |
+| `anthropic/claude-opus-5` | Architecture, difficult debugging, security, adversarial review, and conflicting verification evidence. |
+| `openai-codex/gpt-5.6-luna` | Narrow exploration, mechanical edits, and small tests. |
+| `openai-codex/gpt-5.6-terra` | Planned web features, localized fixes, and regression coverage. |
+| `openai-codex/gpt-5.6-sol` | Multi-component implementation, debugging, review, and interpreting QA evidence. |
+| `zai/glm-5.3` | Usage-limit fallback for either family. |
+
+These are editable task descriptions, not model benchmarks or guaranteed classifications. Use exact model IDs available in your Pi `/model` picker. Only authenticated models are offered. Choose another allowed fallback if you do not use Z.ai.
+
+The preset defaults to `"provider": "anthropic"`. Change just this field to `"provider": "openai"` to select from the configured `openai-codex` models. Run `/reload`, then start a new session. Existing pins remain unchanged. Omit `provider` to let Jev choose across all configured providers, as in upstream. `/jev` shows the selected family.
+
+Without a Gateway key, tasks are not classified. The router uses `fallback` if it belongs to the selected family; otherwise it uses the first eligible model in that family's **configured option order**. In this preset that means Sonnet for Claude and Sol for OpenAI. Models without authentication or compatible input/thinking are excluded. If the selected family has no eligible model, the request fails explicitly. The separate `rateLimitFallback` may cross provider families.
+
+Select `/model auto/jev` to use the router. The preset disables monitoring and automatic skill loading to avoid extra evaluations. New sessions choose a model for their first task; later tasks remain on that pin. Start a new session or explicitly choose a model when changing stages.
+
+SDLC Kit continues to own its stages, approvals, and verification evidence. The router does not run tests, declare QA successful, dispatch subagents, or approve gates. Invoke your SDLC skills normally. Subagents that select a concrete model keep their own settings; this preset does not override them.
+
+### Usage-limit fallback (opt-in)
+
+Set `"rateLimitFallback": "zai/glm-5.3"` inside `jevRouter`, with that model also listed in `options`. This is separate from `fallback`, which handles Jev classification failures. Without this setting, backend errors behave as before.
+
+For a main request, a provider-reported rate or usage-limit error before any text, reasoning, or tool output triggers **one** attempt on the configured model. This includes HTTP 429 and Anthropic's `out of extra usage` error. The router uses the fallback's own authentication and supported thinking policy, and reports the switch. A successful response pins the fallback for the rest of the session, including reload/resume. A failed attempt keeps the original pin and returns the failure.
+
+There is no fallback after partial output, on cancellation, for auxiliary requests, or for unrelated errors such as authentication failures. Unavailable models, incompatible image inputs, and unsupported thinking policies are not retried. The complete original context is forwarded without truncation; a smaller model may reject a long conversation. Provider or Pi retries remain separate from this single router fallback. Use a different provider when models share the same exhausted quota. A switch can lose prompt-cache savings.
 
 ### Thinking
 
@@ -117,8 +149,8 @@ Tasks over **192,000 UTF-8 bytes**, excessive chunk plans, or incomplete evaluat
 
 ## Session behavior
 
-- **Pin once.** The model and initial effort survive tool calls, compaction, `/reload`, and `/resume`. Effort remains fixed unless adaptive Astra effort is enabled. `/new`, `/fork`, and `/clone` choose afresh. Model and initial-effort configuration changes don't rewrite existing pins.
-- **Suggest, never switch.** Monitoring checks new user text and may suggest a fork with another model, once per alternative per session. Use `/fork`, then `/model` and `/thinking` in the fork to follow it. No automatic forks or model switches.
+- **Pin once.** The model and initial effort survive tool calls, compaction, `/reload`, and `/resume`. Effort remains fixed unless adaptive Astra effort is enabled. `/new`, `/fork`, and `/clone` choose afresh. Model and initial-effort configuration changes don't rewrite existing pins. A successful opt-in usage-limit fallback creates a replacement pin.
+- **Suggest, never switch.** Monitoring checks new user text and may suggest a fork with another model, once per alternative per session. Use `/fork`, then `/model` and `/thinking` in the fork to follow it. No automatic forks or task-driven model switches. The opt-in usage-limit fallback is the only automatic model switch.
 - **Control overhead.** Routing and model-monitor evaluation timeouts retry up to three attempts of `timeoutMs` each (1 to 60,000 ms). The entire operation shares a ceiling of **3 × `timeoutMs`**, including chunks and combination: 15 seconds by default. Set `"monitor": false` to disable model-switch advisory checks; tool continuations don't trigger those checks. Adaptive effort has its own per-request check described above.
 - **Fail explicitly.** Initial routing failures use the fallback, with its fixed/inherited effort or highest supported automatic choice. If an existing pin becomes unavailable or cannot accept the input, the router errors instead of switching.
 

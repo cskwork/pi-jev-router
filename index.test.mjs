@@ -33,13 +33,13 @@ const usage = { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, totalToken
 const user = (text, timestamp = 1) => ({ role: "user", content: text, timestamp });
 const context = (text = "Fix a typo", timestamp = 1) => ({ systemPrompt: "PRIVATE SYSTEM INSTRUCTIONS", tools: [], messages: [user(text, timestamp)] });
 
-async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = false, incomplete = false, auth, history = [], sessionId = "main", responsesPayload = false } = {}) {
+async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = false, failures = {}, partialFailure = false, incomplete = false, auth, history = [], sessionId = "main", responsesPayload = false } = {}) {
 	const handlers = new Map();
 	const commands = new Map();
 	const calls = [], entries = structuredClone(history), notices = [];
 	const models = refs.map((ref) => ({
 		provider: ref.split("/")[0], id: ref.slice(ref.indexOf("/") + 1), name: ref,
-		api: "openai-codex-responses", baseUrl: "https://example.invalid",
+		api: ref.startsWith("anthropic/") ? "anthropic-messages" : "openai-codex-responses", baseUrl: "https://example.invalid",
 		contextWindow: 272000, maxTokens: 128000, input: ["text", "image"], reasoning: true,
 		thinkingLevelMap: { xhigh: "xhigh", max: "max" }, cost: usage.cost,
 	}));
@@ -47,11 +47,12 @@ async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = 
 	const backend = {
 		streamSimple(model, ctx, options) {
 			const output = createAssistantMessageEventStream();
+			const error = failures[`${model.provider}/${model.id}`] ?? (backendError ? "Backend failure" : undefined);
+			const content = error && !backendError && !partialFailure ? [] : [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "README.md" } }];
 			const message = {
 				role: "assistant", api: model.api, provider: model.provider, model: model.id,
-				content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "README.md" } }],
-				usage, timestamp: 2, stopReason: backendError ? "error" : "toolUse",
-				...(backendError ? { errorMessage: "Backend failure" } : {}),
+				content, usage, timestamp: 2, stopReason: error ? "error" : "toolUse",
+				...(error ? { errorMessage: error } : {}),
 			};
 			void (async () => {
 				const body = responsesPayload ? { model: model.id, reasoning: { effort: options.reasoning }, input: ctx.messages.map((message) => ({ role: message.role, content: message.content })) } : { model: model.id };
@@ -66,8 +67,8 @@ async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = 
 				}
 				calls.push({ model, context: ctx, options, message, payload });
 				output.push({ type: "start", partial: message });
-				output.push({ type: "toolcall_end", contentIndex: 0, toolCall: message.content[0], partial: message });
-				if (!incomplete) output.push(backendError ? { type: "error", reason: "error", error: message } : { type: "done", reason: "toolUse", message });
+				if (content.length) output.push({ type: "toolcall_end", contentIndex: 0, toolCall: message.content[0], partial: message });
+				if (!incomplete) output.push(error ? { type: "error", reason: "error", error: message } : { type: "done", reason: "toolUse", message });
 				output.end(message);
 			})();
 			return output;
@@ -1244,4 +1245,178 @@ test("validates config and bounds routing text without sending thinking, tools, 
 	assert.deepEqual(routingInput(rich).messages, [{ role: "assistant", text: "Previous answer" }, { role: "user", text: "Fix a typo" }]);
 	assert.equal(routingInput(context("x".repeat(16001))).messages[0].text.length, 16001);
 	assert.match(routingInput(context("x".repeat(192001))).reason, /routing limit/);
+});
+
+const CLAUDE = ["anthropic/claude-sonnet-5", "anthropic/claude-fable-5-1", "anthropic/claude-opus-5"];
+const CODEX = ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra", "openai-codex/gpt-5.6-sol"];
+const GLM = "zai/glm-5.3";
+const WEB_MODELS = [...CLAUDE, ...CODEX, GLM];
+function configureWeb(t, overrides = {}) {
+	const config = JSON.parse(readFileSync(new URL("./examples/web-development.json", import.meta.url), "utf8"));
+	writeFileSync(settingsPath, JSON.stringify({ jevRouter: { ...config.jevRouter, ...overrides } }));
+	t.after(() => rmSync(settingsPath, { force: true }));
+	return config.jevRouter;
+}
+
+test("web preset routes Claude and Codex families with medium effort and no workflow hooks", async (t) => {
+	let selected = CLAUDE[0];
+	const requests = mockGateway(t, () => selected);
+	for (const [provider, refs] of [["anthropic", CLAUDE], ["openai", CODEX]]) {
+		configureWeb(t, { provider });
+		for (const ref of refs) {
+			selected = ref;
+			const h = await harness({ refs: WEB_MODELS });
+			const result = await h.stream(context("Perform the requested SDLC task")).result();
+			assert.equal(`${result.provider}/${result.model}`, ref);
+			assert.equal(result.api, provider === "anthropic" ? "anthropic-messages" : "openai-codex-responses");
+			assert.equal(h.calls[0].options.reasoning, "medium");
+			assert.ok(!h.handlers.has("tool_call"), "router does not approve or execute SDLC gates");
+			assert.deepEqual(new Set(Object.values(requests.at(-1).questions.route.criteria).map(p => p.model)), new Set(refs));
+		}
+	}
+	assert.equal(requests.length, 6);
+	const offered = Object.values(requests[0].questions.route.criteria);
+	assert.match(offered.find(p => p.model === CLAUDE[0]).task, /exploration, documentation/);
+	assert.match(offered.find(p => p.model === CLAUDE[2]).task, /QA or verification evidence/);
+});
+
+test("provider toggle chooses the matching offline default, preserves pins, and fails for an unavailable family", async (t) => {
+	configureWeb(t);
+	const requests = mockGateway(t);
+	const claude = await harness({ refs: WEB_MODELS, gatewayKey: false });
+	assert.equal((await claude.stream().result()).model, "claude-sonnet-5");
+	configureWeb(t, { provider: "openai" });
+	const openai = await harness({ refs: WEB_MODELS, gatewayKey: false });
+	assert.equal((await openai.stream().result()).model, "gpt-5.6-sol", "configured order, not registry order");
+	const resumed = await harness({ refs: WEB_MODELS, gatewayKey: false, history: claude.entries });
+	assert.equal((await resumed.stream().result()).provider, "anthropic", "changing family does not rewrite a pin");
+	const unavailable = await harness({ refs: CLAUDE, gatewayKey: false });
+	assert.match((await unavailable.stream().result()).errorMessage, /on openai-codex/);
+	assert.equal(unavailable.calls.length, 0);
+	const missingDefault = await harness({ refs: [CODEX[0], CODEX[1]], gatewayKey: false });
+	assert.equal((await missingDefault.stream().result()).model, "gpt-5.6-terra", "skip unauthenticated models in option order");
+	assert.equal(requests.length, 0);
+	await openai.commands.get("jev").handler("", openai.ctx);
+	assert.match(openai.notices.at(-1)[0], /Provider: openai/);
+});
+
+test("an omitted provider keeps cross-provider routing compatible", async (t) => {
+	configureWeb(t, { provider: undefined });
+	const requests = mockGateway(t, () => CODEX[0]);
+	const h = await harness({ refs: WEB_MODELS });
+	assert.equal((await h.stream().result()).model, "gpt-5.6-luna");
+	assert.equal(Object.values(requests[0].questions.route.criteria).length, WEB_MODELS.length);
+	for (const provider of [null, "antrophic", "openai-codex", true, {}]) {
+		assert.throws(() => parseConfig({ options: { [FAST]: { description: "x" } }, fallback: FAST, provider }), /Jev provider/);
+	}
+});
+
+test("rate-limit fallback retries once with its own auth, then persists the successful pin", async (t) => {
+	configureWeb(t);
+	const requests = mockGateway(t, () => CLAUDE[2]);
+	for (const error of ['429 rate_limit_error', '400 You\'re out of extra usage.']) {
+		const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: error },
+			auth: async model => ({ ok: true, apiKey: `${model.provider}-key`, headers: { provider: model.provider } }) });
+		h.models.at(-1).maxTokens = 1234;
+		const input = context("Review security-sensitive changes");
+		const stream = h.stream(input, { maxTokens: 5000 });
+		const events = [];
+		for await (const event of stream) events.push(event);
+		assert.equal((await stream.result()).model, "glm-5.3");
+		assert.deepEqual(h.calls.map(c => c.model.provider), ["anthropic", "zai"]);
+		assert.equal(h.calls[1].context, input, "forward the original context without rewriting or truncating it");
+		assert.equal(h.calls[1].options.apiKey, "zai-key");
+		assert.deepEqual(h.calls[1].options.headers, { provider: "zai" });
+		assert.equal(h.calls[1].options.env, undefined);
+		assert.equal(h.calls[1].options.maxTokens, 1234);
+		assert.equal(events.filter(e => e.type === "start").length, 1);
+		assert.equal(events.filter(e => e.type === "error").length, 0);
+		assert.equal(h.entries.filter(e => e.name === "jev-pin").at(-1).data.target, GLM);
+		assert.equal(h.ctx.model.maxTokens, 1234);
+		assert.match(h.notices.at(-1)[0], /Trying zai\/glm-5.3 once/);
+		const resumed = await harness({ refs: [...CLAUDE, GLM], history: h.entries });
+		await resumed.stream(context("Continue", 2)).result();
+		assert.equal(resumed.calls[0].model.provider, "zai");
+	}
+	assert.equal(requests.length, 2, "fallback and resumed requests do not call Jev again");
+});
+
+test("fallback is opt-in, never replays partial output, and leaves other failures explicit", async (t) => {
+	configureWeb(t);
+	mockGateway(t, () => CLAUDE[2]);
+	for (const [error, partialFailure] of [["429 rate limit", true], ["401 unauthorized", false], ["500 unavailable", false]]) {
+		const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: error }, partialFailure });
+		assert.equal((await h.stream().result()).errorMessage, error);
+		assert.equal(h.calls.length, 1);
+	}
+	configureWeb(t, { rateLimitFallback: undefined });
+	const disabled = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429 rate limit" } });
+	assert.equal((await disabled.stream().result()).stopReason, "error");
+	assert.equal(disabled.calls.length, 1);
+});
+
+test("failed fallback retains the original pin and cannot loop", async (t) => {
+	configureWeb(t);
+	mockGateway(t, () => CLAUDE[2]);
+	const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429", [GLM]: "429" } });
+	assert.equal((await h.stream().result()).stopReason, "error");
+	assert.equal(h.calls.length, 2);
+	assert.deepEqual(h.entries.filter(e => e.name === "jev-pin").map(e => e.data.target), [CLAUDE[2]]);
+	const alreadyFallback = await harness({ refs: [GLM], failures: { [GLM]: "429" }, history: [
+		{ name: "jev-pin", data: { target: GLM, thinking: "medium", sessionId: "main" } },
+	] });
+	assert.equal((await alreadyFallback.stream().result()).stopReason, "error");
+	assert.equal(alreadyFallback.calls.length, 1);
+});
+
+test("fallback respects availability, images, thinking policy, cancellation, and auxiliary boundaries", async (t) => {
+	const config = configureWeb(t);
+	mockGateway(t, () => CLAUDE[2]);
+	const unavailable = await harness({ refs: CLAUDE, failures: { [CLAUDE[2]]: "429" } });
+	assert.equal((await unavailable.stream().result()).stopReason, "error");
+	assert.equal(unavailable.calls.length, 1);
+	const images = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429" } });
+	images.models.at(-1).input = ["text"];
+	const input = context();
+	input.messages[0].content = [{ type: "text", text: "Review screenshot" }, { type: "image", data: "test", mimeType: "image/png" }];
+	assert.equal((await images.stream(input).result()).stopReason, "error");
+	assert.equal(images.calls.length, 1);
+	configureWeb(t, { minThinking: "high", options: { ...config.options, [GLM]: { description: "x", thinking: { low: "low only" } } } });
+	const policy = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429" } });
+	assert.equal((await policy.stream().result()).stopReason, "error");
+	assert.equal(policy.calls.length, 1);
+	configureWeb(t);
+	const stop = new AbortController();
+	const cancelled = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429" }, auth: async model => {
+		if (model.provider === "zai") stop.abort();
+		return { ok: true, apiKey: "key" };
+	} });
+	assert.equal((await cancelled.stream(context(), { signal: stop.signal }).result()).stopReason, "aborted");
+	assert.equal(cancelled.calls.length, 1);
+	assert.equal(cancelled.entries.filter(e => e.name === "jev-pin").at(-1).data.target, CLAUDE[2]);
+	const aux = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: "429" }, history: [
+		{ name: "jev-pin", data: { target: CLAUDE[2], thinking: "medium", sessionId: "main" } },
+	] });
+	assert.equal((await aux.stream(context(), { sessionId: "aux" }).result()).stopReason, "error");
+	assert.equal(aux.calls.length, 1);
+});
+
+test("rate-limit fallback config requires an explicitly allowed model", () => {
+	for (const rateLimitFallback of [null, true, [], "auto/jev", "missing/model"]) {
+		assert.throws(() => parseConfig({ options: { [FAST]: { description: "x" } }, fallback: FAST, rateLimitFallback }), /rateLimitFallback/);
+	}
+});
+
+
+test("usage-limit fallback can switch from Claude to each Codex model without Gateway calls", async (t) => {
+	const requests = mockGateway(t);
+	for (const target of CODEX) {
+		configureWeb(t, { rateLimitFallback: target });
+		const h = await harness({ refs: WEB_MODELS, gatewayKey: false, failures: { [CLAUDE[0]]: "429" } });
+		const result = await h.stream().result();
+		assert.equal(`${result.provider}/${result.model}`, target);
+		assert.equal(h.calls.length, 2);
+		assert.equal(h.entries.filter(e => e.name === "jev-pin").at(-1).data.target, target);
+	}
+	assert.equal(requests.length, 0);
 });

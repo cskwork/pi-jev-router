@@ -6,7 +6,7 @@
   "author": "MejiasDev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mejiasd3v/pi-jev-router.git"
+    "url": "https://github.com/cskwork/pi-jev-router.git"
   },
   "keywords": ["pi-package", "pi-extension", "model-routing", "jev"],
   "type": "module",
@@ -16,7 +16,7 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
-  "files": ["index.ts", "README.md", "LICENSE", "assets/logo.png"],
+  "files": ["index.ts", "README.md", "LICENSE", "assets/logo.png", "examples/web-development.json"],
   "scripts": {
     "test": "node --test index.test.mjs"
   },
