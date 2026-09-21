@@ -1,5 +1,6 @@
 {
   "jevRouter": {
+    "classifier": "jev",
     "provider": "anthropic",
     "options": {
       "anthropic/claude-sonnet-5": {

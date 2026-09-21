@@ -16,6 +16,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { getAgentDir, stripFrontmatter, type ContextEvent, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
 import { createGateway, experimental_evaluate as evaluate } from "ai";
+import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
+import webDevelopment from "./examples/web-development.json" with { type: "json" };
 
 const PROVIDER = "auto";
 const MODEL = "jev";
@@ -33,8 +35,26 @@ const CHUNK_CONCURRENCY = 2;
 
 class RoutingBudgetError extends Error {}
 
+function usageLimited(message: string) {
+	return /\b429\b|rate[_ -]limit|too many requests|usage limit|out of extra usage/i.test(message);
+}
+
+export function explainBackendError(message: string, target: string) {
+	if (/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/.test(message)) {
+		return `Jev [runtime]: Could not load the Pi provider for ${target}. Restart Pi to load the current installation; if this persists, reinstall Pi. This is a missing runtime module, not an API-key or usage-limit error.`;
+	}
+	if (usageLimited(message)) return `Jev [usage-limit]: ${target} reached its rate or usage limit. Retry later or select another model with /model. Configure rateLimitFallback for one automatic retry before any output.`;
+	if (/\b(?:401|403)\b|authentication failed|unauthorized|invalid[_ -](?:api[_ -])?key/i.test(message)) {
+		return `Jev [auth]: Authentication failed for ${target}. Run /login ${target.split("/")[0]} and check model access. No automatic model retry was made for this authentication failure.`;
+	}
+	return message;
+}
+
 function fitsEvaluation(state: unknown, questions: unknown) {
-	return Buffer.byteLength(JSON.stringify({ state, questions, providerOptions: {} }), "utf8") <= EVALUATION_BYTES;
+	return Math.max(
+		Buffer.byteLength(JSON.stringify({ state, questions, providerOptions: {} }), "utf8"),
+		Buffer.byteLength(JSON.stringify({ model: "laya-multilingual", state, questions }), "utf8"),
+	) <= EVALUATION_BYTES;
 }
 
 const AUTO_THINKING: Record<ModelThinkingLevel, string> = {
@@ -49,27 +69,16 @@ const AUTO_THINKING: Record<ModelThinkingLevel, string> = {
 
 type ThinkingChoices = Partial<Record<ModelThinkingLevel, string>>;
 type RouteOption = { description: string; thinking?: ModelThinkingLevel | "auto" | ThinkingChoices; minThinking?: ModelThinkingLevel; adaptiveThinking?: boolean };
-type Config = { options: Record<string, RouteOption>; provider?: "anthropic" | "openai"; fallback: string; rateLimitFallback?: string; timeoutMs: number; monitor: boolean; skills: boolean; minThinking?: ModelThinkingLevel };
-const DEFAULT_CONFIG: Config = {
-	options: {
-		"openai-codex/gpt-5.6-luna": {
-			description: "Routine implementation with clear requirements, small fixes, tests, formatting, and straightforward questions. Prefer this when speed matters and the task does not require deep investigation.",
-			thinking: "max",
-		},
-		"openai-codex/gpt-6-astra": {
-			description: "Architecture, planning, code review, difficult debugging, ambiguous requirements, security-sensitive changes, and complex reasoning or engineering across multiple components.",
-			thinking: "xhigh",
-		},
-	},
-	fallback: "openai-codex/gpt-6-astra",
+type Config = { options: Record<string, RouteOption>; provider?: "anthropic" | "openai"; classifier: "jev" | "local"; localUrl: string; typesafeApiKey?: string; fallback: string; rateLimitFallback?: string; timeoutMs: number; monitor: boolean; skills: boolean; minThinking?: ModelThinkingLevel };
+const DEFAULT_CONFIG = {
+	...webDevelopment.jevRouter,
+	localUrl: "http://127.0.0.1:8765/v1",
 	timeoutMs: 5000,
-	monitor: true,
-	skills: false,
 };
 type Selection = {
 	target: string;
 	thinking: ModelThinkingLevel;
-	source: "jev" | "fallback" | "single";
+	source: "jev" | "local" | "fallback" | "single";
 	reason?: string;
 	inputTokens?: number;
 	outputTokens?: number;
@@ -139,7 +148,20 @@ export function parseConfig(value: unknown): Config {
 	if (provider !== undefined && provider !== "anthropic" && provider !== "openai") {
 		throw new Error('Jev provider must be "anthropic" or "openai". Omit it to allow all configured providers.');
 	}
-	return { options, provider, fallback: value.fallback, rateLimitFallback, timeoutMs, monitor, skills, minThinking: parseMinThinking(value.minThinking, "global floor") };
+	if (value.typesafeApiKey !== undefined && (typeof value.typesafeApiKey !== "string" || !value.typesafeApiKey.trim())) {
+		throw new Error("Jev typesafeApiKey must be a nonempty string.");
+	}
+	const classifier = value.classifier === undefined ? "jev" : value.classifier;
+	if (classifier !== "jev" && classifier !== "local") throw new Error('Jev classifier must be "jev" or "local".');
+	let localUrl: URL;
+	try { localUrl = new URL(value.localUrl === undefined ? DEFAULT_CONFIG.localUrl : String(value.localUrl)); }
+	catch { throw new Error("Jev localUrl must be a loopback HTTP URL ending in /v1."); }
+	if (localUrl.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(localUrl.hostname) ||
+		localUrl.username || localUrl.password || localUrl.search || localUrl.hash || localUrl.pathname.replace(/\/$/, "") !== "/v1") {
+		throw new Error("Jev localUrl must be a loopback HTTP URL ending in /v1.");
+	}
+	return { options, provider, classifier, localUrl: localUrl.toString().replace(/\/$/, ""), typesafeApiKey: typeof value.typesafeApiKey === "string" ? value.typesafeApiKey.trim() : undefined,
+		fallback: value.fallback, rateLimitFallback, timeoutMs, monitor, skills, minThinking: parseMinThinking(value.minThinking, "global floor") };
 }
 
 function thinkingProfiles(model: Model<Api>, route: RouteOption, minimum: ModelThinkingLevel | undefined, inherited: ModelThinkingLevel = "off") {
@@ -350,14 +372,26 @@ export default function jevRouter(pi: ExtensionAPI) {
 	const configured = Object.hasOwn(settings, "jevRouter");
 	const config = parseConfig(configured ? settings.jevRouter : DEFAULT_CONFIG);
 	const preferredProvider = config.provider === "openai" ? "openai-codex" : config.provider;
+	const typesafeApiKey = process.env.TYPESAFE_API_KEY?.trim() || process.env.TYPESAFE_AI_API_KEY?.trim() || config.typesafeApiKey;
+	let evaluatorName = config.classifier === "local" ? "Laya multilingual" : typesafeApiKey ? "TypeSafe" : "Gateway";
 	const configSource = configured ? `${settingsPath} (jevRouter)` : "built-in defaults";
 	let active: ExtensionContext | undefined;
 	let pinned: Pin | undefined;
 	let checkedKey: string | undefined;
-	let lastRoute: (Selection & { purpose: "route" | "monitor"; milliseconds: number; estimatedCost: number }) | undefined;
+	let lastRoute: (Selection & { purpose: "route" | "monitor"; milliseconds: number; estimatedCost?: number }) | undefined;
 	const suggestedModels = new Set<string>();
 	let lastSuggestion: Pin | undefined;
 	let skills: Skill[] = [];
+
+	async function evaluationModel(ctx: ExtensionContext, signal: AbortSignal) {
+		if (config.classifier === "jev") {
+			if (typesafeApiKey) { evaluatorName = "TypeSafe"; return createTypeSafeAi({ apiKey: typesafeApiKey }).evaluationModel("jev-latest"); }
+			const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
+			if (auth?.auth.apiKey) { evaluatorName = "Gateway"; return createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev"); }
+		}
+		evaluatorName = "Laya multilingual";
+		return createTypeSafeAi({ apiKey: "local-laya", baseURL: config.localUrl, fetch: (url, init) => fetch(url, { ...init, redirect: "error" }) }).evaluationModel("laya-multilingual");
+	}
 
 	pi.on("before_agent_start", (event) => {
 		if (config.skills) skills = event.systemPromptOptions.skills?.filter((skill) => !skill.disableModelInvocation) ?? [];
@@ -400,9 +434,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 		try {
 			while (input.messages.length > 1 && !fitsEvaluation({ messages: input.messages }, questions)) input.messages.shift();
 			if (!fitsEvaluation({ messages: input.messages }, questions)) throw new Error("skill evaluation budget exceeded");
-			const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
-			if (!auth?.auth.apiKey) throw new Error("missing Gateway key");
-			const model = createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev");
+			const model = await evaluationModel(ctx, signal);
 			const result = await abortable(() => evaluate({ model, state: { messages: input.messages }, questions, abortSignal: signal, maxRetries: 0 }), signal);
 			signal.throwIfAborted();
 			const ranked = offered.map((skill, index) => ({ skill, probability: result.answers[String(index)]?.probability }));
@@ -505,9 +537,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 				if (!fitsEvaluation(state, questions)) throw new Error("effort evaluation budget exceeded");
 				if (profiles.length === 1) thinking = profiles[0].thinking;
 				else {
-					const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
-					if (!auth?.auth.apiKey) throw new Error("missing Gateway key");
-					const model = createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev");
+					const model = await evaluationModel(ctx, signal);
 					const result = await abortable(() => evaluate({ model, state, questions, abortSignal: signal, maxRetries: 0 }), signal);
 					signal.throwIfAborted();
 					const selected = profiles.find((profile) => profile.thinking === result.answers.effort.choice);
@@ -613,9 +643,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 					chunks = chunkRoutingText(messages[messages.length - 1].text, questions);
 					metrics.routingChunks = chunks.length;
 				}
-				const auth = await abortable(() => ctx.modelRegistry.getProviderAuth(GATEWAY), signal);
-				if (!auth?.auth.apiKey) throw new Error("missing Gateway key");
-				const model = createGateway({ apiKey: auth.auth.apiKey }).evaluationModel("typesafe-ai/jev");
+				const model = await evaluationModel(ctx, signal);
 				async function evaluateRequest(state: Parameters<typeof evaluate>[0]["state"]) {
 					if (!fitsEvaluation(state, questions)) throw new RoutingBudgetError("routing request exceeds the evaluation budget");
 					for (let attempt = 1; ; attempt++) {
@@ -662,13 +690,15 @@ export default function jevRouter(pi: ExtensionAPI) {
 				if (performance.now() >= expiresAt) throw new RoutingBudgetError("Jev timed out");
 				const profile = offered.get(decision.choice);
 				if (!profile) throw new Error("invalid route");
-				selection = { target: profile.target, thinking: profile.thinking, source: "jev" };
+				selection = { target: profile.target, thinking: profile.thinking, source: evaluatorName === "Laya multilingual" ? "local" : "jev" };
 			} catch (error) {
 				// Never expose SDK error bodies: they may contain conversation text.
 				options.signal?.throwIfAborted();
 				const status = isRecord(error) && typeof error.statusCode === "number" ? error.statusCode : undefined;
-				const reason = status === 401 ? "Gateway rejected credentials (401); update the Gateway key" :
-					status ? `Jev request failed (HTTP ${status})` : "Jev unavailable; check Gateway login/key and connectivity";
+				const reason = evaluatorName === "Laya multilingual"
+					? `Laya multilingual ${status ? `request failed (HTTP ${status})` : "unavailable"}; start the local server or check localUrl and the input budget`
+					: status === 401 ? `${evaluatorName} rejected credentials (401); update the ${evaluatorName} key` :
+						status ? `Jev request failed (HTTP ${status})` : `Jev unavailable; check ${evaluatorName} login/key and connectivity`;
 				selection = fallback(error instanceof RoutingBudgetError ? error.message :
 					deadline.aborted || (error instanceof Error && error.name === "TimeoutError") ? "Jev timed out" : reason);
 			} finally {
@@ -678,10 +708,11 @@ export default function jevRouter(pi: ExtensionAPI) {
 		}
 		options.signal?.throwIfAborted();
 		checkedKey = key;
-		lastRoute = { ...selection, purpose: pin ? "monitor" : "route", milliseconds: Date.now() - started, estimatedCost: (selection.inputTokens ?? 0) * 0.042 / 1_000_000 };
+		lastRoute = { ...selection, purpose: pin ? "monitor" : "route", milliseconds: Date.now() - started,
+			estimatedCost: evaluatorName === "Gateway" ? (selection.inputTokens ?? 0) * 0.042 / 1_000_000 : undefined };
 		pi.appendEntry(pin ? "jev-monitor" : "jev-route", { ...lastRoute, sessionId, key });
 		if (pin) {
-			if (selection.source === "jev" && selection.target !== pin.target && !suggestedModels.has(selection.target)) {
+			if ((selection.source === "jev" || selection.source === "local") && selection.target !== pin.target && !suggestedModels.has(selection.target)) {
 				lastSuggestion = { target: selection.target, thinking: selection.thinking };
 				pi.appendEntry("jev-suggestion", { ...lastSuggestion, sessionId });
 				suggestedModels.add(selection.target);
@@ -695,6 +726,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 
 	function streamRouter(model: Model<Api>, context: Context, options: SimpleStreamOptions = {}) {
 		const stream = createAssistantMessageEventStream();
+		let backendRef = `${model.provider}/${model.id}`;
 		let message: AssistantMessage = {
 			role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { ...ZERO_COST, total: 0 } },
@@ -714,6 +746,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 				for (let attempt = 0; attempt < 2; attempt++) {
 					const target = available.find((candidate) => `${candidate.provider}/${candidate.id}` === selection.target);
 					if (!target) throw new Error("The pinned Jev route is unavailable or cannot handle this input. Fork or select a concrete model.");
+					backendRef = selection.target;
 					if (mainRequest && attempt === 0) {
 						// Scoped model cycling can restore a stale snapshot, so check the active model.
 						const router = ctx.model;
@@ -755,7 +788,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 						if (event.type === "start" && !message.content.length) { start = event; continue; }
 						if (event.type === "error" && event.reason === "error" && !emitted && !message.content.length &&
 							attempt === 0 && mainRequest && config.rateLimitFallback && config.rateLimitFallback !== selection.target &&
-							/\b429\b|rate[_ -]limit|too many requests|usage limit|out of extra usage/i.test(message.errorMessage ?? "")) {
+							usageLimited(message.errorMessage ?? "")) {
 							const replacement = available.find((candidate) => `${candidate.provider}/${candidate.id}` === config.rateLimitFallback);
 							const profile = replacement && thinkingProfiles(replacement, config.options[config.rateLimitFallback], config.minThinking, options.reasoning).at(-1);
 							if (replacement && profile) {
@@ -774,7 +807,10 @@ export default function jevRouter(pi: ExtensionAPI) {
 							register(candidates(ctx), target);
 							showStatus(ctx);
 						}
-						stream.push(event);
+						if (event.type === "error" && event.reason === "error") {
+							message = { ...message, errorMessage: explainBackendError(message.errorMessage ?? "Provider request failed", backendRef) };
+							stream.push({ ...event, error: message });
+						} else stream.push(event);
 					}
 					if (retry) continue;
 					if (!terminal) throw new Error("The routed provider stream ended without a terminal event.");
@@ -782,7 +818,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 				}
 			} catch (error) {
 				const stopReason = options.signal?.aborted ? "aborted" : "error";
-				message = { ...message, stopReason, errorMessage: stopReason === "aborted" ? "Request cancelled" : error instanceof Error ? error.message : "Jev routing failed" };
+				message = { ...message, stopReason, errorMessage: stopReason === "aborted" ? "Request cancelled" : explainBackendError(error instanceof Error ? error.message : "Jev routing failed", backendRef) };
 				stream.push({ type: "error", reason: stopReason, error: message });
 			} finally {
 				stream.end();
@@ -833,9 +869,9 @@ export default function jevRouter(pi: ExtensionAPI) {
 			const pin = pinned ? `${pinned.target}, thinking ${currentThinking(ctx, pinned)} (initial ${pinned.thinking})` : "not yet selected";
 			const last = lastRoute ? lastRoute.purpose === "monitor" && lastRoute.source === "fallback"
 				? `\nLast monitor failed: ${lastRoute.reason}. Keeping the session pin.`
-				: `\nLast ${lastRoute.purpose}: ${lastRoute.target}, thinking ${lastRoute.thinking} (${lastRoute.source}, ${lastRoute.milliseconds}ms, evaluations: ${lastRoute.evaluationRequests ?? 0}${lastRoute.routingChunks ? `, chunks planned: ${lastRoute.routingChunks}` : ""}, estimated Jev $${lastRoute.estimatedCost.toFixed(6)}${lastRoute.usageIncomplete ? "; usage incomplete" : ""})` : "";
+				: `\nLast ${lastRoute.purpose}: ${lastRoute.target}, thinking ${lastRoute.thinking} (${lastRoute.source}, ${lastRoute.milliseconds}ms, evaluations: ${lastRoute.evaluationRequests ?? 0}${lastRoute.routingChunks ? `, chunks planned: ${lastRoute.routingChunks}` : ""}, ${lastRoute.estimatedCost === undefined ? `tokens: ${lastRoute.inputTokens ?? "?"} in / ${lastRoute.outputTokens ?? "?"} out; cost not estimated` : `estimated Jev $${lastRoute.estimatedCost.toFixed(6)}`}${lastRoute.usageIncomplete ? "; usage incomplete" : ""})` : "";
 			const suggestion = lastSuggestion ? `\nFork suggestion: ${lastSuggestion.target}, thinking ${lastSuggestion.thinking}` : "";
-			ctx.ui.notify(`Jev routes:\n${routes}\nProvider: ${config.provider ?? "all"}\nGlobal minimum thinking: ${config.minThinking ?? "off"}\nPinned: ${pin}\nMonitor: ${config.monitor ? "on" : "off"}\nSkills: ${config.skills ? "on" : "off"}\nFallback: ${config.fallback}\nRate-limit fallback: ${config.rateLimitFallback ?? "off"}\nGateway: ${gateway}${last}${suggestion}\nConfig: ${configSource}\nEdit jevRouter in ${settingsPath}, then /reload. Model and initial-effort changes apply to new sessions. Astra adaptive policy applies after reload.`, "info");
+			ctx.ui.notify(`Jev routes:\n${routes}\nProvider: ${config.provider ?? "all"}\nGlobal minimum thinking: ${config.minThinking ?? "off"}\nPinned: ${pin}\nMonitor: ${config.monitor ? "on" : "off"}\nSkills: ${config.skills ? "on" : "off"}\nFallback: ${config.fallback}\nRate-limit fallback: ${config.rateLimitFallback ?? "off"}\nClassifier: ${config.classifier}\nEvaluator: ${config.classifier === "local" || (!typesafeApiKey && !ctx.modelRegistry.getProviderAuthStatus(GATEWAY).configured) ? `Laya multilingual (${config.localUrl})` : typesafeApiKey ? "TypeSafe direct (configured)" : "Vercel AI Gateway"}\nGateway: ${gateway}${last}${suggestion}\nConfig: ${configSource}\nEdit jevRouter in ${settingsPath}, then /reload. Model and initial-effort changes apply to new sessions. Astra adaptive policy applies after reload.`, "info");
 		},
 	});
 }

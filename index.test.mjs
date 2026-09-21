@@ -14,15 +14,20 @@ const piAi = piRequire.resolve.paths("@earendil-works/pi-ai")
 assert.ok(piAi, "Pi's installed pi-ai package must be available");
 const { createJiti } = piRequire("jiti");
 const jiti = createJiti(import.meta.url, { alias: { "@earendil-works/pi-ai": piAi } });
-const { default: extension, parseConfig, routingInput, effortPayload } = await jiti.import("./index.ts");
+const { default: extension, parseConfig, routingInput, effortPayload, explainBackendError } = await jiti.import("./index.ts");
 const { convertToLlm } = await jiti.import("@earendil-works/pi-coding-agent");
 const { createAssistantMessageEventStream } = await import(pathToFileURL(piAi));
 // Never read or write the developer's settings.
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalTypeSafeEnv = ["TYPESAFE_API_KEY", "TYPESAFE_AI_API_KEY"].map(key => [key, process.env[key]]);
+for (const [key] of originalTypeSafeEnv) delete process.env[key];
 const agentDir = mkdtempSync(join(tmpdir(), "jev-settings-"));
 const settingsPath = join(agentDir, "settings.json");
 process.env.PI_CODING_AGENT_DIR = agentDir;
 after(() => {
+	for (const [key, value] of originalTypeSafeEnv) {
+		if (value === undefined) delete process.env[key]; else process.env[key] = value;
+	}
 	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 	rmSync(agentDir, { recursive: true, force: true });
@@ -33,7 +38,7 @@ const usage = { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, totalToken
 const user = (text, timestamp = 1) => ({ role: "user", content: text, timestamp });
 const context = (text = "Fix a typo", timestamp = 1) => ({ systemPrompt: "PRIVATE SYSTEM INSTRUCTIONS", tools: [], messages: [user(text, timestamp)] });
 
-async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = false, failures = {}, partialFailure = false, incomplete = false, auth, history = [], sessionId = "main", responsesPayload = false } = {}) {
+async function harness({ useDefaults = false, refs = [FAST, DEEP], gatewayKey = true, backendError = false, failures = {}, partialFailure = false, incomplete = false, auth, history = [], sessionId = "main", responsesPayload = false } = {}) {
 	const handlers = new Map();
 	const commands = new Map();
 	const calls = [], entries = structuredClone(history), notices = [];
@@ -109,7 +114,13 @@ async function harness({ refs = [FAST, DEEP], gatewayKey = true, backendError = 
 		registerCommand(name, command) { commands.set(name, command); },
 		setModel: async (model) => { ctx.model = model; return true; },
 	};
-	extension(pi);
+	// Preserve the upstream regression fixture while testing the new defaults separately.
+	const baseline = !useDefaults && !existsSync(settingsPath);
+	if (baseline) writeFileSync(settingsPath, JSON.stringify({ jevRouter: {
+		options: { [FAST]: { description: "Routine implementation", thinking: "max" }, [DEEP]: { description: "Architecture and complex reasoning", thinking: "xhigh" } },
+		fallback: DEEP, monitor: true, skills: false,
+	} }));
+	try { extension(pi); } finally { if (baseline) rmSync(settingsPath); }
 	ctx.model = registry.find("auto", "jev");
 	await handlers.get("session_start")({}, ctx);
 	return {
@@ -1204,9 +1215,9 @@ test("loads global jevRouter settings without merging default routes, and reload
 	const reloaded = await harness();
 	assert.equal((await reloaded.stream().result()).model, "gpt-6-astra");
 	writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
-	const defaults = await harness({ refs: [FAST] });
-	assert.equal((await defaults.stream().result()).model, "gpt-5.6-luna");
-	assert.equal(defaults.calls[0].options.reasoning, "max");
+	const defaults = await harness({ refs: ["anthropic/claude-sonnet-5"] });
+	assert.equal((await defaults.stream().result()).model, "claude-sonnet-5");
+	assert.equal(defaults.calls[0].options.reasoning, "medium");
 });
 
 test("invalid global settings fail instead of using other routes or exposing JSON contents", async (t) => {
@@ -1346,7 +1357,7 @@ test("fallback is opt-in, never replays partial output, and leaves other failure
 	mockGateway(t, () => CLAUDE[2]);
 	for (const [error, partialFailure] of [["429 rate limit", true], ["401 unauthorized", false], ["500 unavailable", false]]) {
 		const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: error }, partialFailure });
-		assert.equal((await h.stream().result()).errorMessage, error);
+		assert.equal((await h.stream().result()).errorMessage, explainBackendError(error, CLAUDE[2]));
 		assert.equal(h.calls.length, 1);
 	}
 	configureWeb(t, { rateLimitFallback: undefined });
@@ -1419,4 +1430,164 @@ test("usage-limit fallback can switch from Claude to each Codex model without Ga
 		assert.equal(h.entries.filter(e => e.name === "jev-pin").at(-1).data.target, target);
 	}
 	assert.equal(requests.length, 0);
+});
+
+function mockTypeSafe(t, respond = () => CLAUDE[2], apiKey = 'direct-test-key') {
+	const previous = globalThis.fetch, requests = [];
+	globalThis.fetch = async (url, options) => {
+		assert.equal(String(url), 'https://api.typesafe.ai/v1/systemone');
+		assert.equal(new Headers(options.headers).get('authorization'), `Bearer ${apiKey}`);
+		assert.equal(new Headers(options.headers).get('ai-model-id'), null);
+		assert.ok(Buffer.byteLength(options.body) <= 28_000);
+		const body = JSON.parse(options.body);
+		assert.equal(body.model, 'jev-latest');
+		assert.equal(body.providerOptions, undefined);
+		requests.push(body);
+		const response = await respond(options, body);
+		if (response instanceof Response) return response;
+		const answers = Object.fromEntries(Object.entries(body.questions).map(([id, question]) => {
+			if (question.type === 'noul') return [id, { type: 'noul', noul: 0.95 }];
+			const choice = id === 'effort' ? response : Object.entries(question.criteria).find(([, p]) => p.model === response)?.[0];
+			return [id, { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map(key => [key, key === choice ? 1 : 0])) }];
+		}));
+		return Response.json({ model: 'jev-1.13.0', answers, usage: { input_tokens: 100, output_tokens: 20 } });
+	};
+	t.after(() => { globalThis.fetch = previous; });
+	return requests;
+}
+
+test('direct TypeSafe config routes without Gateway, accounts for usage, and does not expose its key', async (t) => {
+	configureWeb(t, { typesafeApiKey: 'direct-test-key' });
+	const requests = mockTypeSafe(t);
+	const h = await harness({ refs: WEB_MODELS, gatewayKey: false });
+	h.ctx.modelRegistry.getProviderAuth = async () => { throw new Error('Gateway must not be queried'); };
+	assert.equal((await h.stream().result()).model, 'claude-opus-5');
+	assert.equal(requests.length, 1);
+	const route = h.entries.find(e => e.name === 'jev-route').data;
+	assert.equal(route.inputTokens, 100);
+	assert.equal(route.outputTokens, 20);
+	assert.equal(route.estimatedCost, undefined, 'do not apply Gateway pricing to direct TypeSafe');
+	await h.commands.get('jev').handler('', h.ctx);
+	assert.match(h.notices.at(-1)[0], /Evaluator: TypeSafe direct/);
+	assert.match(h.notices.at(-1)[0], /100 in \/ 20 out/);
+	assert.doesNotMatch(JSON.stringify([h.entries, h.notices, requests, h.calls]), /direct-test-key|PRIVATE SYSTEM INSTRUCTIONS(?=.*direct-test-key)/);
+	assert.equal(h.calls[0].options.apiKey, 'codex-test-key', 'direct key is never used for generation');
+});
+
+test('TypeSafe environment keys override settings and retain SDK alias compatibility', async (t) => {
+	configureWeb(t, { typesafeApiKey: 'settings-test-key' });
+	mockTypeSafe(t);
+	t.after(() => { delete process.env.TYPESAFE_API_KEY; delete process.env.TYPESAFE_AI_API_KEY; });
+	process.env.TYPESAFE_AI_API_KEY = 'direct-test-key';
+	assert.equal((await (await harness({ refs: WEB_MODELS })).stream().result()).model, 'claude-opus-5');
+	process.env.TYPESAFE_AI_API_KEY = 'alias-key';
+	process.env.TYPESAFE_API_KEY = ' direct-test-key ';
+	assert.equal((await (await harness({ refs: WEB_MODELS })).stream().result()).model, 'claude-opus-5');
+});
+
+test('direct errors and malformed answers use inference fallback without leaking response bodies or switching evaluators', async (t) => {
+	configureWeb(t, { typesafeApiKey: 'direct-test-key' });
+	let response = Response.json({ message: 'PRIVATE_KEY_AND_PROMPT' }, { status: 401 });
+	const requests = mockTypeSafe(t, () => response);
+	const failed = await harness({ refs: WEB_MODELS });
+	assert.equal((await failed.stream().result()).model, 'claude-sonnet-5');
+	assert.match(failed.notices[0][0], /TypeSafe rejected credentials \(401\)/);
+	assert.doesNotMatch(JSON.stringify([failed.entries, failed.notices]), /PRIVATE_KEY_AND_PROMPT|direct-test-key/);
+	response = Response.json({ answers: { route: { type: 'choice', choice: 'not-offered', probabilities: { 'not-offered': 1 } } } });
+	assert.equal((await (await harness({ refs: WEB_MODELS })).stream().result()).model, 'claude-sonnet-5');
+	assert.equal(requests.length, 2);
+});
+
+test('direct TypeSafe supports opt-in skill selection and adaptive effort with existing budgets', async (t) => {
+	configureSkills(t, { typesafeApiKey: 'direct-test-key' });
+	const requests = mockTypeSafe(t, (_options, body) => body.questions.effort ? 'low' : DEEP);
+	const skills = await harness({ refs: [FAST], gatewayKey: false });
+	await setSkills(skills, [skillFixture('direct-skill')]);
+	assert.match((await skillContext(skills, [user('Use direct-skill')])).messages.at(-1).content, /PRIVATE BODY/);
+	assert.equal(Object.values(requests[0].questions)[0].type, 'noul');
+	configureSkills(t, { typesafeApiKey: 'direct-test-key', skills: false, monitor: false,
+		options: { [DEEP]: { description: 'deep', thinking: 'auto', adaptiveThinking: true } }, fallback: DEEP });
+	const h = await harness({ refs: [DEEP], gatewayKey: false, responsesPayload: true });
+	await h.stream().result();
+	await h.stream(context('Continue', 2)).result();
+	assert.equal(requests.at(-1).questions.effort.type, 'choice');
+	assert.equal(h.entries.filter(e => e.name === 'jev-effort').at(-1).data.thinking, 'low');
+});
+
+test('direct evaluation cancellation prevents generation and saving a pin', async (t) => {
+	configureWeb(t, { typesafeApiKey: 'direct-test-key' });
+	const stop = new AbortController();
+	mockTypeSafe(t, () => { stop.abort(); return CLAUDE[2]; });
+	const h = await harness({ refs: WEB_MODELS, gatewayKey: false });
+	assert.equal((await h.stream(context(), { signal: stop.signal }).result()).stopReason, 'aborted');
+	assert.equal(h.calls.length, 0);
+	assert.equal(h.entries.length, 0);
+});
+
+test('direct API-key configuration rejects invalid values without including them in errors', () => {
+	for (const typesafeApiKey of ['', ' ', 42, null, ['private']]) {
+		assert.throws(() => parseConfig({ options: { [FAST]: { description: 'x' } }, fallback: FAST, typesafeApiKey }), /^Error: Jev typesafeApiKey must be a nonempty string\.$/);
+	}
+});
+
+test('local classifier is used only when requested or when Jev credentials are absent', async (t) => {
+	const previous = globalThis.fetch;
+	const requests = [];
+	globalThis.fetch = async (url, options) => {
+		assert.equal(String(url), 'http://127.0.0.1:8765/v1/systemone');
+		assert.equal(new Headers(options.headers).get('authorization'), 'Bearer local-laya');
+		assert.equal(options.redirect, 'error');
+		const body = JSON.parse(options.body);
+		assert.equal(body.model, 'laya-multilingual');
+		requests.push(body);
+		const choice = Object.keys(body.questions.route.criteria)[0];
+		return Response.json({ answers: { route: { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(body.questions.route.criteria).map(k => [k, k === choice ? 1 : 0])) } } });
+	};
+	t.after(() => { globalThis.fetch = previous; });
+	for (const classifier of ['jev', 'local']) {
+		configureWeb(t, { classifier, ...(classifier === 'local' ? { typesafeApiKey: 'NEVER_SEND_TO_LOCAL' } : {}) });
+		const h = await harness({ refs: WEB_MODELS, gatewayKey: classifier === 'local' });
+		assert.equal((await h.stream().result()).stopReason, 'toolUse');
+		assert.equal(h.entries.find(e => e.name === 'jev-route').data.source, 'local');
+		await h.commands.get('jev').handler('', h.ctx);
+		assert.match(h.notices.at(-1)[0], /Evaluator: Laya multilingual/);
+		assert.doesNotMatch(JSON.stringify([h.entries, h.notices, requests]), /NEVER_SEND_TO_LOCAL/);
+	}
+	assert.equal(requests.length, 2);
+});
+
+test('local configuration rejects remote addresses, URL credentials, and invalid classifier modes', () => {
+	const base = { options: { [FAST]: { description: 'x' } }, fallback: FAST };
+	for (const localUrl of ['https://example.com/v1', 'http://127.0.0.1.evil.test/v1', 'http://user:secret@127.0.0.1/v1', 'http://127.0.0.1/v1?key=secret', 'http://127.0.0.1/other']) {
+		assert.throws(() => parseConfig({ ...base, localUrl }), /loopback HTTP URL/);
+	}
+	for (const classifier of [null, true, 'laya', 'auto']) assert.throws(() => parseConfig({ ...base, classifier }), /classifier/);
+	for (const localUrl of ['http://localhost:8765/v1', 'http://[::1]:8765/v1/']) assert.ok(parseConfig({ ...base, localUrl }));
+});
+
+test('runtime, authentication, and usage failures have distinct actionable messages', async (t) => {
+	configureWeb(t);
+	mockGateway(t, () => CLAUDE[0]);
+	const missing = "Cannot find module '/pi/dist/bundle/chunks/anthropic-messages-old.js' imported from /pi/chunk.js";
+	const h = await harness({ refs: WEB_MODELS });
+	h.ctx.modelRegistry.getProvider = () => ({ streamSimple() { throw new Error(missing); } });
+	assert.match((await h.stream().result()).errorMessage, /\[runtime\].*Restart Pi/);
+	assert.equal(h.entries.filter(e => e.name === 'jev-pin').length, 1, 'module failures do not trigger a model fallback');
+	for (const [error, category, nextStep] of [['401 invalid_api_key', 'auth', '/login anthropic'], ['403 permission denied', 'auth', 'check model access'], ["400 You're out of extra usage", 'usage-limit', 'Retry later']]) {
+		const message = explainBackendError(error, CLAUDE[0]);
+		assert.ok(message.includes(`[${category}]`));
+		assert.ok(message.includes(nextStep));
+	}
+});
+
+
+test('unconfigured installs default to Jev and the Claude web-development preset', async (t) => {
+	const requests = mockGateway(t, () => CLAUDE[1]);
+	const h = await harness({ useDefaults: true, refs: WEB_MODELS });
+	assert.equal((await h.stream().result()).model, 'claude-fable-5-1');
+	assert.deepEqual(new Set(Object.values(requests[0].questions.route.criteria).map(p => p.model)), new Set(CLAUDE));
+	assert.equal(h.calls[0].options.reasoning, 'medium');
+	await h.commands.get('jev').handler('', h.ctx);
+	assert.match(h.notices.at(-1)[0], /Provider: anthropic/);
+	assert.match(h.notices.at(-1)[0], /Classifier: jev/);
 });

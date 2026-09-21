@@ -1,38 +1,62 @@
 {
-  "name": "pi-jev-router",
-  "version": "0.4.0",
-  "description": "Automatic model routing for Pi using TypeSafe's Jev through Vercel AI Gateway",
+  "name": "pi-router-jev",
+  "version": "0.5.0",
+  "description": "Task-aware model routing for Pi with Jev, local multilingual Laya, Claude and Codex",
   "license": "MIT",
   "author": "MejiasDev",
   "repository": {
     "type": "git",
     "url": "https://github.com/cskwork/pi-jev-router.git"
   },
-  "keywords": ["pi-package", "pi-extension", "model-routing", "jev"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "model-routing",
+    "jev"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
-  "files": ["index.ts", "README.md", "LICENSE", "assets/logo.png", "examples/web-development.json"],
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE",
+    "assets/logo.png",
+    "examples/web-development.json",
+    "README.en.md",
+    "scripts/laya-server.py"
+  ],
   "scripts": {
-    "test": "node --test index.test.mjs"
+    "test": "node --test index.test.mjs",
+    "docs": "node scripts/build-docs.mjs",
+    "test:local": "python3 -m unittest discover -s scripts -p \"*_test.py\""
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": { "optional": true },
-    "@earendil-works/pi-coding-agent": { "optional": true }
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1"
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "marked": "18.0.13"
   },
   "dependencies": {
+    "@ai-sdk/typesafe-ai": "3.0.4",
     "ai": "7.0.105",
     "zod": "4.6.5"
-  }
+  },
+  "homepage": "https://cskwork.github.io/pi-jev-router/"
 }

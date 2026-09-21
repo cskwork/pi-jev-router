@@ -1,210 +1,187 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/mejiasd3v/pi-jev-router/main/assets/logo.png" alt="Jev Router logo" width="144" height="144">
-</p>
-<h1 align="center">Jev Router</h1>
-<p align="center">Choose once. Stay pinned.</p>
-<p align="center">
-  <a href="https://www.npmjs.com/package/pi-jev-router"><img src="https://img.shields.io/npm/v/pi-jev-router?style=flat-square&amp;color=67e8b4&amp;logo=npm&amp;logoColor=white" alt="npm version"></a>
-  <a href="https://github.com/mejiasd3v/pi-jev-router/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/mejiasd3v/pi-jev-router/test.yml?branch=main&amp;style=flat-square&amp;label=tests&amp;logo=github" alt="Tests"></a>
-  <a href="https://github.com/mejiasd3v/pi-jev-router/blob/main/LICENSE"><img src="https://img.shields.io/github/license/mejiasd3v/pi-jev-router?style=flat-square&amp;color=8b9cff" alt="MIT license"></a>
-  <a href="https://pi.dev"><img src="https://img.shields.io/badge/Pi-0.85.1%2B-f8b86d?style=flat-square" alt="Pi 0.85.1 or later"></a>
-</p>
+# Pi router Jev
 
-Let [TypeSafe's Jev](https://vercel.com/ai-gateway/models/jev) choose a model and reasoning effort for [Pi](https://pi.dev). The model stays fixed for the session unless you enable the usage-limit fallback below. Effort stays fixed too, unless you enable adaptive effort for Codex Astra. Generation uses your existing Pi providers and credentials, including Claude Opus, Fable, and Sonnet, plus Codex Luna, Terra, and Sol.
+한국어 · [English](README.en.md) · [브라우저 언어에 맞춘 문서](https://cskwork.github.io/pi-jev-router/)
 
-## Get started
+Pi에서 작업에 맞는 모델과 추론 수준을 선택하는 확장입니다. 기본 분류기는 TypeSafe Jev이며, API 키가 없거나 사용자가 선택하면 로컬 Laya multilingual을 사용합니다. 실제 답변과 도구 실행은 기존 Pi 제공자와 인증으로 처리합니다.
 
-Requires Pi **0.85.1+**, Node.js **22.19+**, and a **Vercel AI Gateway key**.
+[mejiasd3v/pi-jev-router](https://github.com/mejiasd3v/pi-jev-router)를 기반으로 만든 포크입니다. 이 포크의 npm 이름은 `pi-router-jev`이며, 원본의 `pi-jev-router`와 구분됩니다.
+
+## 설치
+
+Pi 0.85.1 이상과 Node.js 22.19 이상이 필요합니다.
+
+```sh
+pi install npm:pi-router-jev
+```
+
+Git으로도 설치할 수 있습니다. 두 경로 중 하나만 설치하세요.
 
 ```sh
 pi install git:github.com/cskwork/pi-jev-router
 ```
 
-This fork includes the usage-limit fallback and web-development preset. `npm:pi-jev-router` installs the upstream package. Keep only one installation.
+1. Pi의 `/login`으로 사용할 모델 제공자를 인증합니다.
+2. 기본 웹 개발 설정을 그대로 사용하거나 아래 설정을 전역 `~/.pi/agent/settings.json`에 합칩니다.
+3. `/reload` 후 `/model auto/jev`를 선택합니다. `/jev`로 설정과 선택 결과를 확인합니다.
 
-1. Use `/login` for your generation provider and `/login vercel-ai-gateway` for Jev. `AI_GATEWAY_API_KEY` also works.
-2. Run `/reload`, then `/model auto/jev`.
-3. Start with your actual task. `/jev` shows the pin, selected effort, and fork suggestions.
+기존 Git 설치는 `pi update git:github.com/cskwork/pi-jev-router`로 갱신할 수 있습니다. 실행 중 Pi 자체를 업데이트했다면 프로세스를 완전히 종료하고 다시 시작하세요.
 
-## Configure
+## Jev API 키
 
-Merge `jevRouter` into **global** `~/.pi/agent/settings.json`, then `/reload`:
+기본 설정은 `"classifier": "jev"`입니다. 다음 순서로 인증을 선택합니다.
+
+1. 환경 변수 `TYPESAFE_API_KEY`
+2. AI SDK가 사용하는 별칭 `TYPESAFE_AI_API_KEY`
+3. 전역 설정의 `jevRouter.typesafeApiKey`
+4. Pi에 저장한 Vercel AI Gateway 인증 또는 `AI_GATEWAY_API_KEY`
+5. 클라우드 키가 하나도 없으면 로컬 Laya
+
+```sh
+export TYPESAFE_API_KEY='your-key'
+pi
+```
+
+설정 파일을 선호하면 `jevRouter` 안에 `"typesafeApiKey": "your-key"`를 추가하고 `/reload`하세요. 키는 비공개 설정에만 저장하고 Git에 커밋하지 마세요. 환경 변수를 변경했다면 해당 터미널에서 Pi를 다시 시작해야 합니다.
+
+직접 호출은 [공식 AI SDK TypeSafe 제공자](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai)의 `jev-latest`를 사용합니다. [TypeSafe API](https://docs.typesafe.ai/api) 키는 모델 생성 제공자, `/jev` 출력, 세션의 라우팅 기록에 전달하지 않습니다. 잘못된 키가 설정되어 있으면 오류를 알리고 생성용 기본 모델을 사용합니다. 인증 오류를 숨기며 다른 분류기로 재시도하지 않습니다.
+
+## Claude / OpenAI 선택
+
+[전체 웹 개발 설정](examples/web-development.json)을 전역 설정에 합치세요. 예시는 Claude를 기본 계열로 선택하고 모든 모델의 추론 수준을 `medium`으로 설정합니다.
 
 ```json
 {
   "jevRouter": {
+    "classifier": "jev",
+    "provider": "anthropic",
     "options": {
-      "openai-codex/gpt-5.6-luna": {
-        "description": "Small fixes, tests, and routine implementation.",
-        "thinking": "auto"
+      "anthropic/claude-sonnet-5": {
+        "description": "Exploration, documentation, small fixes, and established QA scenarios.",
+        "thinking": "medium"
       },
-      "openai-codex/gpt-6-astra": {
-        "description": "Architecture, difficult debugging, and complex reasoning.",
-        "thinking": "auto"
+      "anthropic/claude-opus-5": {
+        "description": "Architecture, difficult debugging, security, and conflicting verification evidence.",
+        "thinking": "medium"
+      },
+      "openai-codex/gpt-5.6-sol": {
+        "description": "Multi-component implementation, debugging, code review, and verification.",
+        "thinking": "medium"
       }
     },
-    "fallback": "openai-codex/gpt-6-astra",
-    "timeoutMs": 5000,
-    "monitor": true,
+    "fallback": "anthropic/claude-sonnet-5",
+    "rateLimitFallback": "openai-codex/gpt-5.6-sol",
+    "monitor": false,
     "skills": false
   }
 }
 ```
 
-Only listed, authenticated models are eligible; `fallback` must be listed too. Routes replace the default list; they aren't merged. `PI_CODING_AGENT_DIR` is respected; project settings cannot override routing.
+`"provider": "openai"`로 한 줄만 바꾸면 `openai-codex` 모델 중에서 선택합니다. `/reload` 후 새 세션을 시작하세요. 진행 중인 세션의 고정 모델은 바꾸지 않습니다. `provider`를 생략하면 등록한 모든 제공자를 후보로 사용합니다.
 
-Without configuration, defaults are Luna/`max`, Astra/`xhigh`, Astra fallback, a five-second timeout, and monitoring on. The example above enables automatic effort.
-
-### Web development with Claude, Codex, and SDLC Kit
-
-Merge [examples/web-development.json](examples/web-development.json) into your global settings. It uses existing Pi providers, with `medium` thinking for each route:
-
-| Model | Task description offered to Jev |
+| 전체 설정에 포함된 모델 | 분류기에 전달하는 작업 설명 |
 | --- | --- |
-| `anthropic/claude-sonnet-5` | Exploration, documentation, small fixes, established tests and browser QA scenarios. |
-| `anthropic/claude-fable-5-1` | Web features, UI/API integration, regression tests, and planned multi-file changes. |
-| `anthropic/claude-opus-5` | Architecture, difficult debugging, security, adversarial review, and conflicting verification evidence. |
-| `openai-codex/gpt-5.6-luna` | Narrow exploration, mechanical edits, and small tests. |
-| `openai-codex/gpt-5.6-terra` | Planned web features, localized fixes, and regression coverage. |
-| `openai-codex/gpt-5.6-sol` | Multi-component implementation, debugging, review, and interpreting QA evidence. |
-| `zai/glm-5.3` | Usage-limit fallback for either family. |
+| Sonnet 5 | 탐색, 문서, 작은 수정, 정해진 테스트와 브라우저 QA |
+| Fable 5.1 | 계획된 웹 기능, UI/API 연결, 회귀 테스트 |
+| Opus 5 | 설계, 어려운 디버깅, 보안, 반대 관점의 리뷰, 검증 결과 해석 |
+| Luna 5.6 | 범위가 좁은 탐색, 기계적인 수정, 작은 테스트 |
+| Terra 5.6 | 기존 패턴에 따른 웹 개발, 국소 버그 수정 |
+| Sol 5.6 | 여러 구성 요소의 구현, 디버깅, 리뷰, 검증 |
+| GLM 5.3 | 사용량 제한 시 대체 모델 |
 
-These are editable task descriptions, not model benchmarks or guaranteed classifications. Use exact model IDs available in your Pi `/model` picker. Only authenticated models are offered. Choose another allowed fallback if you do not use Z.ai.
+작업 설명은 수정할 수 있으며 성능 순위를 보장하지 않습니다. Pi에 등록되고 인증된 정확한 모델 ID를 사용하세요. `options`는 기본 목록을 통째로 대체합니다. `fallback`과 `rateLimitFallback`도 `options`에 등록해야 합니다.
 
-The preset defaults to `"provider": "anthropic"`. Change just this field to `"provider": "openai"` to select from the configured `openai-codex` models. Run `/reload`, then start a new session. Existing pins remain unchanged. Omit `provider` to let Jev choose across all configured providers, as in upstream. `/jev` shows the selected family.
+분류가 실패하면 선택한 계열의 `fallback`을 사용합니다. `fallback`이 다른 계열에 속하면 설정 파일의 순서상 첫 번째 사용 가능한 모델을 선택합니다. 전체 예시에서는 Claude의 기본 모델이 Sonnet, OpenAI의 기본 모델이 Sol입니다. 후보가 없으면 명시적으로 실패합니다.
 
-Without a Gateway key, tasks are not classified. The router uses `fallback` if it belongs to the selected family; otherwise it uses the first eligible model in that family's **configured option order**. In this preset that means Sonnet for Claude and Sol for OpenAI. Models without authentication or compatible input/thinking are excluded. If the selected family has no eligible model, the request fails explicitly. The separate `rateLimitFallback` may cross provider families.
+## 로컬 Laya multilingual
 
-Select `/model auto/jev` to use the router. The preset disables monitoring and automatic skill loading to avoid extra evaluations. New sessions choose a model for their first task; later tasks remain on that pin. Start a new session or explicitly choose a model when changing stages.
+클라우드 키가 없으면 로컬 분류를 시도합니다. 키가 있어도 `"classifier": "local"`을 설정하면 로컬만 사용합니다. 기본 주소는 `http://127.0.0.1:8765/v1`이며 `localUrl`로 변경할 수 있습니다. 루프백 HTTP 주소만 허용하고 리다이렉트는 거부합니다.
 
-SDLC Kit continues to own its stages, approvals, and verification evidence. The router does not run tests, declare QA successful, dispatch subagents, or approve gates. Invoke your SDLC skills normally. Subagents that select a concrete model keep their own settings; this preset does not override them.
+이 저장소를 내려받은 폴더에서 실행하세요.
 
-### Usage-limit fallback (opt-in)
-
-Set `"rateLimitFallback": "zai/glm-5.3"` inside `jevRouter`, with that model also listed in `options`. This is separate from `fallback`, which handles Jev classification failures. Without this setting, backend errors behave as before.
-
-For a main request, a provider-reported rate or usage-limit error before any text, reasoning, or tool output triggers **one** attempt on the configured model. This includes HTTP 429 and Anthropic's `out of extra usage` error. The router uses the fallback's own authentication and supported thinking policy, and reports the switch. A successful response pins the fallback for the rest of the session, including reload/resume. A failed attempt keeps the original pin and returns the failure.
-
-There is no fallback after partial output, on cancellation, for auxiliary requests, or for unrelated errors such as authentication failures. Unavailable models, incompatible image inputs, and unsupported thinking policies are not retried. The complete original context is forwarded without truncation; a smaller model may reject a long conversation. Provider or Pi retries remain separate from this single router fallback. Use a different provider when models share the same exhausted quota. A switch can lose prompt-cache savings.
-
-### Thinking
-
-| `thinking` | Behavior |
-| --- | --- |
-| `"auto"` | Jev chooses the lowest effort it judges sufficient. |
-| `"high"` | Force a level, clamped to the model's capabilities. |
-| `{"low": "Small changes", "high": "Hard problems"}` | Customize the allowed choices and their descriptions. |
-| Omitted | Inherit Pi's thinking level when the pin is created. |
-
-Levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Automatic choices are filtered to supported levels. Model and effort are chosen together, not in separate evaluations.
-
-Set `jevRouter.minThinking` for a global floor, and `minThinking` inside a model's option for a stricter per-model floor. For example, global `"medium"` plus Luna `"high"` lets Jev choose medium or higher for Astra and high or higher for Luna when both use `"thinking": "auto"`. An omitted model minimum inherits the global floor. Only `openai-codex/gpt-6-astra` can override it: an explicit Astra `"minThinking": "low"` permits low effort even with global `"medium"`, for both initial routing and adaptive effort. Other models can only raise the global floor. Both fields are optional and default to no additional restriction.
-
-Automatic and custom choices below the floor are excluded. Fixed or inherited effort below the floor is raised to the lowest supported level meeting it. Routes with no eligible level are excluded, including non-reasoning models when the floor is above `off`; fallback errors if it has no eligible choice. `/jev` shows configured minimums. Reload after editing; existing session pins keep their original effort.
-
-### Adaptive Astra effort (opt-in)
-
-Set `"adaptiveThinking": true` inside the `openai-codex/gpt-6-astra` option, alongside `"thinking": "auto"` or custom thinking choices. Other models and fixed/inherited effort policies do not accept this flag.
-
-```json
-"openai-codex/gpt-6-astra": {
-  "description": "Architecture and difficult debugging.",
-  "thinking": "auto",
-  "adaptiveThinking": true
-}
+```sh
+python3 -m venv .venv-laya
+.venv-laya/bin/pip install 'laya==0.3.5'
+.venv-laya/bin/python scripts/laya-server.py
 ```
 
-After the initial route, Jev assesses the next step before each main model request, including tool continuations. It can raise effort for unresolved failures or difficult decisions and lower it for routine work. It chooses only supported levels allowed by your choices and minimums. This is a heuristic, not a guarantee that Jev detects every stall. Changes take effect between responses, never inside a running response.
+이 터미널을 켜 둔 상태에서 Pi를 사용합니다. 첫 실행은 Hugging Face에서 모델을 내려받습니다. 준비 완료 메시지가 나온 뒤 요청을 받습니다. npm 패키지에도 같은 서버 스크립트가 포함됩니다.
 
-- **Keep the model and request prefix.** The original request-level effort stays fixed. Changes use Astra's append-only `configuration_update` items, replayed at their original input positions. This follows [OpenAI's cache-preserving mechanism](https://developers.openai.com/api/docs/guides/reasoning#change-reasoning-mid-conversation); normal cache requirements still apply. Do not use provider-side automatic compaction, automatic truncation, or another hook that inserts configuration updates.
-- **Persist and recover.** Decisions follow the active branch across reload/resume. If local Pi compaction or edited history invalidates an update's original prefix, the current effort is re-established on the rebuilt input. Forks choose afresh. Auxiliary requests reuse effort without evaluating or saving changes.
-- **Bound overhead.** At most one additional evaluation per distinct request context, bounded by `timeoutMs`, with no retries and a 28,000-byte request budget. Failure retains current effort; cancellation stops the request. `monitor: false` disables model-switch suggestions, not adaptive effort.
-- **See changes.** Notifications, the status line, and `/jev` show current effort. `/jev` also shows the initial effort used at request level. Pi's thinking picker still does not control or track the router's effort.
+`convaiinnovations/laya`의 **multilingual** 체크포인트 하나를 CPU에 올려 한국어·영어 등 지원 언어를 처리합니다. 영어 전용 모델로 바꾸지 않습니다. 서버는 `127.0.0.1:8765`에만 바인딩하며 `/health`에서 준비 상태를 확인할 수 있습니다. Ctrl+C로 종료합니다. 플러그인이 Python이나 모델을 자동 설치하거나 상시 프로세스를 만들지는 않습니다.
 
-Reload after changing the flag. Enabling it can adapt an existing Astra pin on its next request. Disabling it stops new decisions but preserves and replays prior updates; use a new session for a fresh pin.
+[Laya 공식 설명](https://github.com/NandhaKishorM/laya)처럼 로컬 모델은 Jev보다 문맥이 짧고 작업에 따라 정확도가 달라집니다. 브리지는 상태가 모델의 토큰 예산을 넘으면 거절하며 질문과 선택지를 각각 20개로 제한합니다. 질문과 선택지 설명은 Laya 내부에서도 길이가 제한됩니다. 길거나 복잡한 작업에는 Jev를 권장합니다. 로컬 서버가 꺼져 있거나 입력을 처리하지 못하면 경고 후 생성용 기본 모델을 사용합니다.
 
-**Additional data and cost:** effort checks send the latest user-text excerpt plus up to eight recent user, assistant, and tool-result excerpts to Vercel/TypeSafe. Each excerpt keeps up to 1,600 characters, split between its beginning and end. Tool names and error flags are included; tool-call arguments, reasoning blocks, images, and system messages are excluded. Tool-result text can contain secrets and is not redacted. These evaluations are billed separately and are not included in `/jev` routing-cost estimates.
+## 사용량 제한과 오류
 
-### Automatic skill loading (opt-in)
+`fallback`은 **분류 실패**에, `rateLimitFallback`은 **답변 생성 중 사용량 제한**에 사용합니다.
 
-Set `"skills": true` inside your existing global `jevRouter` configuration, then `/reload`. It defaults to `false` and works with both `auto/jev` and concrete models, independently of `monitor`.
+- HTTP 429나 Anthropic의 `out of extra usage`처럼 사용량 제한이 확인되면, 출력이 시작되기 전에만 대체 모델로 한 번 시도합니다.
+- 대체 모델이 성공하면 해당 모델을 세션에 고정하고 재시작 후에도 유지합니다. 실패하면 원래 고정을 유지하고 오류를 반환합니다.
+- 텍스트·추론·도구 호출이 이미 시작되었거나 요청이 취소된 경우에는 다시 실행하지 않습니다.
+- 인증 실패, 실행 파일 누락, 다른 서버 오류, 보조 요청은 자동 전환 대상이 아닙니다. 인증·이미지·추론 정책에 맞지 않는 후보도 제외합니다.
+- 원문 문맥은 잘라내지 않고 전달합니다. 문맥이 작은 대체 모델은 긴 대화를 거절할 수 있습니다. Pi나 제공자 자체의 재시도는 별도로 적용됩니다.
 
-Before generation for each new user turn, including steering messages, Jev checks Pi's discovered skill names and descriptions against recent user/assistant text. It loads up to **three** matches with a returned probability of at least **0.8**. These probabilities are heuristic relevance signals, not guarantees.
+| 표시 | 의미와 조치 |
+| --- | --- |
+| `Jev [runtime]` | Pi 제공자의 실행 파일을 불러오지 못했습니다. Pi를 완전히 종료하고 재시작하세요. 계속되면 Pi 설치를 복구하세요. 인증이나 사용량 제한 오류가 아닙니다. |
+| `Jev [auth]` | 생성 모델의 인증이나 접근 권한 문제입니다. 안내된 제공자로 `/login`하세요. |
+| `Jev [usage-limit]` | 요청량 또는 사용량 한도입니다. 기다리거나 `/model`로 다른 모델을 선택하세요. |
+| `TypeSafe rejected credentials (401)` | TypeSafe 키를 갱신하세요. 설정 파일을 변경했다면 `/reload`, 환경 변수를 변경했다면 Pi를 재시작하세요. |
+| 로컬 연결 실패·시간 초과·HTTP 413 | Laya 서버의 준비 상태를 확인하거나 긴 작업에 Jev를 사용하세요. |
 
-- Uses Pi's catalog, including its trust and discovery settings. Skills marked `disable-model-invocation` are never auto-loaded.
-- Injects full skill instructions with their source path and reference directory. It does not execute scripts or eagerly load linked references.
-- Skips skills already included as `<skill>` blocks or successfully loaded through a complete `read` call in the current context. Path aliases are canonicalized. Arbitrary shell commands or unmarked pasted instructions cannot reliably be recognized as skill loads.
-- Saves selections and instructions on the active session branch. Tool continuations and `/reload` reuse them without another evaluation or file read. Skills removed by compaction or branch navigation can be selected again when needed.
-- Makes at most one additional evaluation per user turn, bounded by `timeoutMs` with no retries and the same **28,000-byte** request budget. Older history is dropped first; oversized tasks/catalogs skip selection rather than using a partial task. Full injected instructions are limited to **50,000 bytes** per turn; unreadable or oversized skills are skipped with a warning.
+## SDLC Kit와 세션
 
-`/jev` shows whether this feature is enabled. Failures leave ordinary skill loading available. Turning it off stops selection and reinjection; it does not erase instructions the model already read or remove saved session records.
+SDLC Kit가 단계, 승인, QA·검증 근거를 관리합니다. 라우터는 테스트 성공이나 승인 여부를 판단하지 않으며 서브에이전트를 실행하지 않습니다. 기존 SDLC 스킬을 그대로 사용하세요. 구체적인 모델을 지정한 서브에이전트의 설정도 유지됩니다.
 
-### Long prompts
+모델과 초기 추론 수준은 세션에 한 번 고정합니다. 도구 호출, 압축, `/reload`, `/resume`에서 유지하며 `/new`, `/fork`, `/clone`에서는 새로 선택합니다. 다른 단계로 넘어갈 때 새 세션이나 명시적 모델 선택을 사용할 수 있습니다. 구체적인 모델을 선택하면 라우팅을 우회합니다.
 
-The latest task takes priority; older history is dropped before splitting it. Requests have a **28,000-byte serialized UTF-8 budget**, including route descriptions. This is a conservative proxy for Jev's [roughly 32K-token request budget](https://docs.typesafe.ai/primitives#ask-speculative-questions), not an exact token count.
+`monitor: true`는 새 사용자 요청을 검토해 다른 모델의 포크를 제안합니다. 제안만으로 자동 전환하지 않습니다. 전체 예시는 추가 평가 비용을 줄이기 위해 `monitor`와 `skills`를 끕니다.
 
-Tasks that don't fit are split into at most **eight overlapping chunks**, evaluated **two at a time**, then combined in one final evaluation. The final evaluation is instructed to weigh requirements, not vote counts. This is still a heuristic: relationships across sections may be missed.
+## 고급 설정
 
-Tasks over **192,000 UTF-8 bytes**, excessive chunk plans, or incomplete evaluations use fallback (or retain the existing pin during monitoring). The coding model always receives the original input; its context limits still apply.
+| 설정 | 동작 |
+| --- | --- |
+| `thinking: "medium"` | 모델이 지원하는 범위 안에서 고정합니다. |
+| `thinking: "auto"` | 분류기가 모델과 필요한 추론 수준을 함께 선택합니다. |
+| `thinking: {"low": "설명", "high": "설명"}` | 허용 수준과 의미를 직접 정합니다. |
+| `thinking` 생략 | 처음 고정할 때 Pi의 추론 수준을 상속합니다. |
+| `minThinking` | 전역 또는 모델별 최소 수준입니다. 지원하지 않는 후보는 제외합니다. |
+| `timeoutMs` | 평가 시간 제한입니다. 기본 5,000ms, 1~60,000ms 범위입니다. |
+| `skills: true` | 발견된 스킬 중 관련성이 높은 최대 3개를 자동 로드합니다. 기본은 꺼짐입니다. |
+| Astra의 `adaptiveThinking: true` | `openai-codex/gpt-6-astra`에서 자동 추론 선택과 함께 쓸 수 있습니다. 다른 모델은 허용하지 않습니다. |
 
-## Session behavior
+수준은 `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`입니다. Astra의 명시적 모델 최소값만 전역 최소값보다 낮출 수 있습니다. 자동 스킬은 확률 0.8 이상인 후보를 고르며, 명시적 호출 전용 스킬은 제외합니다. 도구 연속 실행에서는 같은 선택을 다시 평가하지 않습니다. 고급 기능의 캐시·압축·분기 처리 조건은 [영문 상세 문서](README.en.md)를 참고하세요.
 
-- **Pin once.** The model and initial effort survive tool calls, compaction, `/reload`, and `/resume`. Effort remains fixed unless adaptive Astra effort is enabled. `/new`, `/fork`, and `/clone` choose afresh. Model and initial-effort configuration changes don't rewrite existing pins. A successful opt-in usage-limit fallback creates a replacement pin.
-- **Suggest, never switch.** Monitoring checks new user text and may suggest a fork with another model, once per alternative per session. Use `/fork`, then `/model` and `/thinking` in the fork to follow it. No automatic forks or task-driven model switches. The opt-in usage-limit fallback is the only automatic model switch.
-- **Control overhead.** Routing and model-monitor evaluation timeouts retry up to three attempts of `timeoutMs` each (1 to 60,000 ms). The entire operation shares a ceiling of **3 × `timeoutMs`**, including chunks and combination: 15 seconds by default. Set `"monitor": false` to disable model-switch advisory checks; tool continuations don't trigger those checks. Adaptive effort has its own per-request check described above.
-- **Fail explicitly.** Initial routing failures use the fallback, with its fixed/inherited effort or highest supported automatic choice. If an existing pin becomes unavailable or cannot accept the input, the router errors instead of switching.
+## 입력·개인정보·비용
 
-Context limits follow the pinned backend. The status and `/jev` show its current effort; Pi's thinking picker does not track automatic choices. Selecting a concrete model bypasses model routing, but not opt-in skill selection. Deferred/background generation is unsupported by `auto/jev`.
+모델 선택에는 최근 사용자·어시스턴트 텍스트 최대 8개를 사용합니다. 시스템 프롬프트, 추론 내용, 이미지, 도구 결과는 기본 모델 선택 평가에 보내지 않습니다. 다만 일반 대화에 포함된 민감한 텍스트는 자동으로 가리지 않습니다.
 
-## Privacy and cost
+Astra의 선택적 적응형 추론은 도구 결과 발췌를 포함할 수 있습니다. 자동 스킬 선택은 스킬 이름과 설명을 평가기에 보내고 본문은 로컬에서 읽습니다. 명시적 로컬 모드에서는 평가 내용을 클라우드로 보내지 않지만, 이후 답변 생성에는 선택한 Pi 제공자를 사용합니다.
 
-Routing and monitoring consider up to **eight recent user/assistant text messages**, limited to **192,000 UTF-8 bytes of source text**. Evaluations send selected text, route/effort descriptions, and chunk assessments to Vercel/TypeSafe. Overlaps, excerpts, and retries can send the same text more than once. System prompts, reasoning blocks, tool-result blocks, images, and provider credentials are excluded from model-routing evaluations. Opt-in adaptive effort additionally sends tool-result excerpts as described above. **Conversation text is not redacted and may contain secrets.**
+평가 요청은 직렬화한 UTF-8 기준 28,000바이트로 제한합니다. 최신 작업이 길면 최대 8개 겹치는 조각으로 나누고 한 번 결합합니다. 192,000바이트를 넘거나 평가가 완성되지 않으면 기본 모델을 사용합니다. 최초 라우팅과 모니터링의 시간 초과 재시도는 최대 3회이며 전체 시간도 `3 × timeoutMs`로 제한합니다. 적응형 추론과 스킬 선택은 각각 별도 평가이며 재시도하지 않습니다.
 
-Opt-in skill selection additionally sends eligible skill names and descriptions to Vercel/TypeSafe. Skill file contents are read locally and stored in the session; automatically injected skill messages are excluded from subsequent Jev evaluations. Manually pasted or expanded skill instructions in user messages remain conversation text.
+Jev 평가는 별도 과금됩니다. `/jev`의 Gateway 비용은 추정치이며 Pi 생성 비용 합계에 포함되지 않습니다. 직접 TypeSafe와 로컬 평가에는 토큰 수만 표시합니다. Laya에는 API 요금이 없지만 로컬 연산과 모델 저장 공간이 필요합니다. 모델 고정은 캐시 재사용에 도움이 되지만 캐시 적중이나 비용 절감을 보장하지 않습니다.
 
-Gateway evaluations are billed separately. Chunking uses at most nine evaluations before timeout retries, or 27 attempts total. `/jev` estimates sum returned usage; failed, cancelled, or timed-out calls may still be billed. Skill-selection evaluations are additional and are not included in `/jev` routing estimates. Evaluation costs are not in Pi's footer totals. Pinning favors cache reuse but guarantees neither cache hits nor savings.
-
-<details>
-<summary>Migrating from file-based configuration</summary>
-
-Move the old `routes.json` contents under `jevRouter` and unset `JEV_ROUTES_FILE`; neither is read anymore. Sessions created before pinning was introduced select a pin on their next main request.
-
-</details>
-
-## Development
+## 개발·게시
 
 ```sh
 nub install --frozen-lockfile --ignore-scripts
 nub run test
+nub run docs
 ```
 
-Tests mock network responses; no API keys or paid requests are needed.
+테스트는 네트워크 응답을 모의 처리하며 API 키가 필요하지 않습니다. 로컬 서버 검증은 `python3 -m unittest discover -s scripts -p '*_test.py'`로 실행합니다.
 
-## Publishing
+공개 npm 이름은 `pi-router-jev`입니다. `pi-package` 키워드와 `pi.extensions`가 있으므로 [Pi 공식 패키지 목록](https://pi.dev/packages)의 수집 대상입니다. 게시 후 npm 버전과 실제 목록을 확인하세요. 검색 반영에는 시간이 걸릴 수 있습니다.
 
-`.github/workflows/publish.yml` publishes stable GitHub releases to npm using [trusted publishing](https://docs.npmjs.com/trusted-publishers/). It checks that the release tag matches `package.json`, installs from the frozen lockfile, and runs tests before publishing. Prereleases are skipped. The publish step uses npm's native OIDC flow; installs and tests use Nub.
+```sh
+npm test
+npm pack --dry-run
+npm login
+npm publish --access public
+```
 
-### One-time npm setup
+GitHub의 자동 npm 게시는 패키지 설정에 `cskwork/pi-jev-router`와 `publish.yml`을 trusted publisher로 연결한 뒤 사용할 수 있습니다. Git 푸시만으로 npm에 게시되지는 않습니다.
 
-In [pi-jev-router package settings](https://www.npmjs.com/package/pi-jev-router/access), add a **GitHub Actions** trusted publisher:
+문서 사이트는 `docs/`에서 GitHub Pages로 제공합니다. 브라우저가 선호하는 한국어 또는 영어를 선택하며 둘 다 없으면 한국어를 표시합니다. 페이지의 언어 링크로 변경할 수 있습니다. GitHub README 자체는 브라우저 언어에 따라 자동 전환되지 않으므로 이 파일을 기본으로 두고 영어판을 연결합니다.
 
-| Field | Value |
-| --- | --- |
-| Organization or user | `mejiasd3v` |
-| Repository | `pi-jev-router` |
-| Workflow filename | `publish.yml` |
-| Environment name | Leave blank |
-| Allowed actions | Allow direct `npm publish`, not just staged publishing |
-
-No npm token or GitHub secret is needed. Keep account 2FA enabled. This connection must be saved on npm before the first automated release; committing the workflow alone does not authorize npm publishing.
-
-### Release a version
-
-1. Bump `package.json`, commit, and push to `main`.
-2. Create and push the matching `vX.Y.Z` tag.
-3. Publish its GitHub release, for example `gh release create vX.Y.Z --verify-tag --generate-notes`.
-4. Wait for **Publish to npm** to succeed and verify the new npm version.
-
-Publishing a GitHub release triggers npm publication; pushing a tag alone does not. Release tags must include the publish workflow. A failed run can be rerun after fixing the npm connection; an already-published npm version cannot be overwritten.
-
-[MIT](LICENSE).
+[MIT 라이선스](LICENSE). 원본 작성자는 MejiasDev이며 이 포크에서 제공자 선택, TypeSafe 직접 호출, 로컬 Laya, 사용량 제한 복구를 추가했습니다.

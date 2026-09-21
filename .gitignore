@@ -3,3 +3,6 @@ node_modules/
 .env.*
 *.tgz
 .DS_Store
+
+.venv-laya/
+__pycache__/
