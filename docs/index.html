@@ -156,6 +156,10 @@ pi
 <td>요청량 또는 사용량 한도입니다. 기다리거나 <code>/model</code>로 다른 모델을 선택하세요.</td>
 </tr>
 <tr>
+<td><code>Vercel AI Gateway refused the Jev request (HTTP 403)</code></td>
+<td>키는 유효하지만 Vercel 팀에 결제 수단이 없거나 키에 AI Gateway 권한이 없습니다. vercel.com/ai에서 카드를 등록하면 무료 크레딧이 열립니다. 그동안은 생성용 기본 모델을 사용합니다.</td>
+</tr>
+<tr>
 <td><code>TypeSafe rejected credentials (401)</code></td>
 <td>TypeSafe 키를 갱신하세요. 설정 파일을 변경했다면 <code>/reload</code>, 환경 변수를 변경했다면 Pi를 재시작하세요.</td>
 </tr>
@@ -446,6 +450,10 @@ npm publish --access public
 <tr>
 <td><code>Jev [usage-limit]</code></td>
 <td>Provider quota or rate limit. A configured eligible <code>rateLimitFallback</code> is tried once before any output; otherwise wait or choose a model.</td>
+</tr>
+<tr>
+<td><code>Vercel AI Gateway refused the Jev request (HTTP 403)</code></td>
+<td>The key is valid, but the Vercel team has no payment method on file or the key lacks AI Gateway access. Adding a card at vercel.com/ai unlocks the free credits; until then the generation fallback is used.</td>
 </tr>
 <tr>
 <td><code>TypeSafe rejected credentials (401)</code></td>

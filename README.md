@@ -129,6 +129,7 @@ python3 -m venv .venv-laya
 | `Jev [runtime]` | Pi 제공자의 실행 파일을 불러오지 못했습니다. Pi를 완전히 종료하고 재시작하세요. 계속되면 Pi 설치를 복구하세요. 인증이나 사용량 제한 오류가 아닙니다. |
 | `Jev [auth]` | 생성 모델의 인증이나 접근 권한 문제입니다. 안내된 제공자로 `/login`하세요. |
 | `Jev [usage-limit]` | 요청량 또는 사용량 한도입니다. 기다리거나 `/model`로 다른 모델을 선택하세요. |
+| `Vercel AI Gateway refused the Jev request (HTTP 403)` | 키는 유효하지만 Vercel 팀에 결제 수단이 없거나 키에 AI Gateway 권한이 없습니다. vercel.com/ai에서 카드를 등록하면 무료 크레딧이 열립니다. 그동안은 생성용 기본 모델을 사용합니다. |
 | `TypeSafe rejected credentials (401)` | TypeSafe 키를 갱신하세요. 설정 파일을 변경했다면 `/reload`, 환경 변수를 변경했다면 Pi를 재시작하세요. |
 | 로컬 연결 실패·시간 초과·HTTP 413 | Laya 서버의 준비 상태를 확인하거나 긴 작업에 Jev를 사용하세요. |
 | Claude 경로에서 출력 없이 CPU 100%로 멈춤 | 라우터 문제가 아닙니다. `pi-background-tasks` 2.6.2의 `attribution` 기능이 Anthropic 제공자를 대체하며 Pi 0.86+의 시스템 메시지에서 무한 루프에 빠집니다. Pi 실행 전 `PI_BG_FEATURES=process,delegate,fusion,attested`를 내보내세요. 구체적인 Anthropic 모델을 직접 골라도 같은 증상이면 이 원인입니다. |

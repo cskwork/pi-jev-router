@@ -1,5 +1,12 @@
 # 변경 기록 / Changelog
 
+## 0.7.1 · 2026-09-22
+
+- Vercel AI Gateway가 HTTP 403을 돌려주면 "결제 수단 없음 또는 키 권한 없음"이라는 조치 가능한 이유를 표시합니다. 응답 본문은 여전히 노출하지 않습니다.
+
+Actionable reason for Vercel AI Gateway HTTP 403 (no payment method or no
+gateway access) without exposing the response body.
+
 ## 0.7.0 · 2026-09-22
 
 - 분류기 지시문을 절반 길이로 줄였습니다. 규칙은 같습니다: 작업 적합성으로 모델을 먼저 고르고, 그 모델 안에서 충분한 최저 추론 수준을 고르며, 추론 수준 표시는 모델 선택 이유가 되지 않습니다.

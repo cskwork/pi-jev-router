@@ -299,6 +299,16 @@ test("skill limits and failures leave normal generation available and never expo
 	assert.doesNotMatch(JSON.stringify(failed.notices) + JSON.stringify(failed.entries), /PRIVATE FAILURE BODY/);
 });
 
+test("gateway 403 explains billing without exposing the response body", async (t) => {
+	mockGateway(t, () => Response.json({ error: "PRIVATE BILLING BODY" }, { status: 403 }));
+	const h = await harness();
+	await h.stream().result();
+	const route = h.entries.find((entry) => entry.name === "jev-route");
+	assert.equal(route.data.source, "fallback");
+	assert.match(route.data.reason, /HTTP 403.*payment method/);
+	assert.doesNotMatch(JSON.stringify(h.notices) + JSON.stringify(h.entries), /PRIVATE BILLING BODY/);
+});
+
 test("skill file failures skip only that skill and cancellation saves no decision", async (t) => {
 	configureSkills(t);
 	const missing = skillFixture("missing-body"), huge = skillFixture("huge-body"), good = skillFixture("good-body");

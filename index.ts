@@ -705,6 +705,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 				const reason = evaluatorName === "Laya multilingual"
 					? `Laya multilingual ${status ? `request failed (HTTP ${status})` : "unavailable"}; start the local server or check localUrl and the input budget`
 					: status === 401 ? `${evaluatorName} rejected credentials (401); update the ${evaluatorName} key` :
+					status === 403 && evaluatorName === "Gateway" ? "Vercel AI Gateway refused the Jev request (HTTP 403); the Vercel team usually has no payment method on file or the key lacks AI Gateway access. Add a card at vercel.com/ai, or set a TypeSafe key" :
 						status ? `Jev request failed (HTTP ${status})` : `Jev unavailable; check ${evaluatorName} login/key and connectivity`;
 				selection = fallback(error instanceof RoutingBudgetError ? error.message :
 					deadline.aborted || (error instanceof Error && error.name === "TimeoutError") ? "Jev timed out" : reason);
