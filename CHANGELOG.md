@@ -1,5 +1,17 @@
 # 변경 기록 / Changelog
 
+## 0.7.0 · 2026-09-22
+
+- 분류기 지시문을 절반 길이로 줄였습니다. 규칙은 같습니다: 작업 적합성으로 모델을 먼저 고르고, 그 모델 안에서 충분한 최저 추론 수준을 고르며, 추론 수준 표시는 모델 선택 이유가 되지 않습니다.
+- README에 라우터를 시작 기본 모델로 두는 방법(`defaultProvider`/`defaultModel` 또는 `/model`에서 Ctrl+S)을 적었습니다.
+- Claude 경로가 출력 없이 멈추는 `pi-background-tasks` 2.6.2 `attribution` 충돌과 우회 방법을 문제 해결 표에 추가했습니다.
+- Pi 0.87.0에서 테스트와 실제 실행(`pi -p --model auto/jev`)을 확인했습니다.
+
+Shorter classifier instructions with the same rules, README guidance for making
+the router the startup default, a troubleshooting entry for the
+pi-background-tasks 2.6.2 attribution hang on Claude routes, and verification
+against Pi 0.87.0.
+
 ## 0.6.0 · 2026-09-22
 
 - 업스트림 v0.5.0의 작업 적합성 라우팅을 통합했습니다. 분류기가 모델을 먼저 고른 뒤 그 모델 안에서 추론 수준을 고르며, 높은 추론 수준이 모델의 역할 범위를 넓히지 않습니다.

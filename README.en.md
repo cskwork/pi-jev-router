@@ -15,7 +15,7 @@ pi install npm:pi-router-jev
 Git installation: `pi install git:github.com/cskwork/pi-jev-router`. Keep one installation. This fork of [mejiasd3v/pi-jev-router](https://github.com/mejiasd3v/pi-jev-router) is published as `pi-router-jev`; the npm package `pi-jev-router` remains the upstream project.
 
 1. Use `/login` for your generation provider. For Jev, set a TypeSafe key as described below, or use `/login vercel-ai-gateway` / `AI_GATEWAY_API_KEY`.
-2. Run `/reload`, then `/model auto/jev`.
+2. Run `/reload`, then `/model auto/jev`. To start every new session on the router, set `"defaultProvider": "auto"` and `"defaultModel": "jev"` in global settings, or press Ctrl+S on `auto/jev` in `/model`.
 3. Start with your actual task. `/jev` shows the pin, selected effort, and fork suggestions.
 
 ## Classifier and API keys
@@ -228,6 +228,7 @@ The release workflow uses npm trusted publishing. Configure a trusted publisher 
 | `Jev [auth]` | Generation credentials or model permissions failed. Use the named provider's `/login`. No model retry occurs for authentication errors. |
 | `Jev [usage-limit]` | Provider quota or rate limit. A configured eligible `rateLimitFallback` is tried once before any output; otherwise wait or choose a model. |
 | `TypeSafe rejected credentials (401)` | Replace the TypeSafe key, then reload or restart depending on where it is configured. |
+| Claude routes hang at 100% CPU with no output | Not the router. `pi-background-tasks` 2.6.2's `attribution` feature replaces the Anthropic provider and loops forever on the system messages Pi 0.86+ keeps in the transcript. Export `PI_BG_FEATURES=process,delegate,fusion,attested` before starting Pi. Selecting a concrete Anthropic model reproduces it without the router. |
 | Local connection/timeout or HTTP 413 | Start the Laya bridge, wait for readiness, or use Jev for a longer task. The generation fallback remains available. |
 
 `fallback` handles classifier failures; `rateLimitFallback` handles generation usage limits. Selecting a concrete model bypasses the router. Keep `/model auto/jev` selected to use its behavior.

@@ -614,7 +614,7 @@ test("structured three-model criteria survive routing and monitoring", async (t)
 	await h.stream(context("Next task", 3)).result();
 	for (const request of requests) {
 		for (const profile of Object.values(request.questions.route.criteria)) assert.deepEqual(profile.task, rubric);
-		assert.match(request.questions.route.instructions, /High effort does not expand/);
+		assert.match(request.questions.route.instructions, /model-relative/);
 	}
 	for (const description of [{}, { ...rubric, use_when: [] }, { ...rubric, not_for: [1] }, { ...rubric, boundary: "" }]) {
 		assert.throws(() => parseConfig({ ...config, options: { [DEEP]: { description } } }), /Invalid Jev route/);
@@ -634,9 +634,9 @@ test("global and model thinking floors constrain routing, monitoring, and fallba
 	await h.stream().result();
 	assert.equal(h.calls[0].options.reasoning, "high");
 	assert.equal(requests.length, 1, "model and effort still use one evaluation");
-	assert.match(requests[0].questions.route.instructions, /model by task fit.*first/);
-	assert.match(requests[0].questions.route.instructions, /Effort levels are model-relative/);
-	assert.match(requests[0].questions.route.instructions, /configured effort floor may exceed/);
+	assert.match(requests[0].questions.route.instructions, /fits first/);
+	assert.match(requests[0].questions.route.instructions, /Effort labels are model-relative/);
+	assert.match(requests[0].questions.route.instructions, /floor above the task's needs/);
 	assert.deepEqual(Object.values(requests[0].questions.route.criteria).map(({ model, thinking }) => [model, thinking]),
 		[[FAST, "high"], [FAST, "xhigh"], [FAST, "max"], [DEEP, "medium"], [DEEP, "high"], [DEEP, "xhigh"], [DEEP, "max"]]);
 	await h.commands.get("jev").handler("", h.ctx);
@@ -646,7 +646,7 @@ test("global and model thinking floors constrain routing, monitoring, and fallba
 	await h.stream(context("Hard task", 3)).result();
 	assert.equal(h.calls.at(-1).options.reasoning, "high");
 	assert.equal(h.entries.find((entry) => entry.name === "jev-suggestion").data.thinking, "medium");
-	assert.match(requests[1].questions.route.instructions, /task fit first/);
+	assert.match(requests[1].questions.route.instructions, /better-fitting model/);
 	assert.match(requests[1].questions.route.instructions, /not a reason to fork/);
 	const fallback = await harness({ gatewayKey: false });
 	await fallback.stream().result();

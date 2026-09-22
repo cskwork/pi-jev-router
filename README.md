@@ -23,6 +23,7 @@ pi install git:github.com/cskwork/pi-jev-router
 1. Pi의 `/login`으로 사용할 모델 제공자를 인증합니다.
 2. 기본 웹 개발 설정을 그대로 사용하거나 아래 설정을 전역 `~/.pi/agent/settings.json`에 합칩니다.
 3. `/reload` 후 `/model auto/jev`를 선택합니다. `/jev`로 설정과 선택 결과를 확인합니다.
+4. 새 세션마다 라우터로 시작하려면 전역 설정에 `"defaultProvider": "auto"`, `"defaultModel": "jev"`를 넣거나 `/model`에서 `auto/jev`를 고른 뒤 Ctrl+S로 저장합니다.
 
 기존 Git 설치는 `pi update git:github.com/cskwork/pi-jev-router`로 갱신할 수 있습니다. 실행 중 Pi 자체를 업데이트했다면 프로세스를 완전히 종료하고 다시 시작하세요.
 
@@ -130,6 +131,7 @@ python3 -m venv .venv-laya
 | `Jev [usage-limit]` | 요청량 또는 사용량 한도입니다. 기다리거나 `/model`로 다른 모델을 선택하세요. |
 | `TypeSafe rejected credentials (401)` | TypeSafe 키를 갱신하세요. 설정 파일을 변경했다면 `/reload`, 환경 변수를 변경했다면 Pi를 재시작하세요. |
 | 로컬 연결 실패·시간 초과·HTTP 413 | Laya 서버의 준비 상태를 확인하거나 긴 작업에 Jev를 사용하세요. |
+| Claude 경로에서 출력 없이 CPU 100%로 멈춤 | 라우터 문제가 아닙니다. `pi-background-tasks` 2.6.2의 `attribution` 기능이 Anthropic 제공자를 대체하며 Pi 0.86+의 시스템 메시지에서 무한 루프에 빠집니다. Pi 실행 전 `PI_BG_FEATURES=process,delegate,fusion,attested`를 내보내세요. 구체적인 Anthropic 모델을 직접 골라도 같은 증상이면 이 원인입니다. |
 
 ## SDLC Kit와 세션
 

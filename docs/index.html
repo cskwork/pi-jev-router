@@ -29,6 +29,7 @@ body{margin:0}header{border-bottom:1px solid #d6dad2;padding:1rem max(1rem,calc(
 <li>Pi의 <code>/login</code>으로 사용할 모델 제공자를 인증합니다.</li>
 <li>기본 웹 개발 설정을 그대로 사용하거나 아래 설정을 전역 <code>~/.pi/agent/settings.json</code>에 합칩니다.</li>
 <li><code>/reload</code> 후 <code>/model auto/jev</code>를 선택합니다. <code>/jev</code>로 설정과 선택 결과를 확인합니다.</li>
+<li>새 세션마다 라우터로 시작하려면 전역 설정에 <code>&quot;defaultProvider&quot;: &quot;auto&quot;</code>, <code>&quot;defaultModel&quot;: &quot;jev&quot;</code>를 넣거나 <code>/model</code>에서 <code>auto/jev</code>를 고른 뒤 Ctrl+S로 저장합니다.</li>
 </ol>
 <p>기존 Git 설치는 <code>pi update git:github.com/cskwork/pi-jev-router</code>로 갱신할 수 있습니다. 실행 중 Pi 자체를 업데이트했다면 프로세스를 완전히 종료하고 다시 시작하세요.</p>
 <h2>Jev API 키</h2>
@@ -162,6 +163,10 @@ pi
 <td>로컬 연결 실패·시간 초과·HTTP 413</td>
 <td>Laya 서버의 준비 상태를 확인하거나 긴 작업에 Jev를 사용하세요.</td>
 </tr>
+<tr>
+<td>Claude 경로에서 출력 없이 CPU 100%로 멈춤</td>
+<td>라우터 문제가 아닙니다. <code>pi-background-tasks</code> 2.6.2의 <code>attribution</code> 기능이 Anthropic 제공자를 대체하며 Pi 0.86+의 시스템 메시지에서 무한 루프에 빠집니다. Pi 실행 전 <code>PI_BG_FEATURES=process,delegate,fusion,attested</code>를 내보내세요. 구체적인 Anthropic 모델을 직접 골라도 같은 증상이면 이 원인입니다.</td>
+</tr>
 </tbody></table>
 <h2>SDLC Kit와 세션</h2>
 <p>SDLC Kit가 단계, 승인, QA·검증 근거를 관리합니다. 라우터는 테스트 성공이나 승인 여부를 판단하지 않으며 서브에이전트를 실행하지 않습니다. 기존 SDLC 스킬을 그대로 사용하세요. 구체적인 모델을 지정한 서브에이전트의 설정도 유지됩니다.</p>
@@ -239,7 +244,7 @@ npm publish --access public
 <p>Git installation: <code>pi install git:github.com/cskwork/pi-jev-router</code>. Keep one installation. This fork of <a href="https://github.com/mejiasd3v/pi-jev-router">mejiasd3v/pi-jev-router</a> is published as <code>pi-router-jev</code>; the npm package <code>pi-jev-router</code> remains the upstream project.</p>
 <ol>
 <li>Use <code>/login</code> for your generation provider. For Jev, set a TypeSafe key as described below, or use <code>/login vercel-ai-gateway</code> / <code>AI_GATEWAY_API_KEY</code>.</li>
-<li>Run <code>/reload</code>, then <code>/model auto/jev</code>.</li>
+<li>Run <code>/reload</code>, then <code>/model auto/jev</code>. To start every new session on the router, set <code>&quot;defaultProvider&quot;: &quot;auto&quot;</code> and <code>&quot;defaultModel&quot;: &quot;jev&quot;</code> in global settings, or press Ctrl+S on <code>auto/jev</code> in <code>/model</code>.</li>
 <li>Start with your actual task. <code>/jev</code> shows the pin, selected effort, and fork suggestions.</li>
 </ol>
 <h2>Classifier and API keys</h2>
@@ -445,6 +450,10 @@ npm publish --access public
 <tr>
 <td><code>TypeSafe rejected credentials (401)</code></td>
 <td>Replace the TypeSafe key, then reload or restart depending on where it is configured.</td>
+</tr>
+<tr>
+<td>Claude routes hang at 100% CPU with no output</td>
+<td>Not the router. <code>pi-background-tasks</code> 2.6.2&#39;s <code>attribution</code> feature replaces the Anthropic provider and loops forever on the system messages Pi 0.86+ keeps in the transcript. Export <code>PI_BG_FEATURES=process,delegate,fusion,attested</code> before starting Pi. Selecting a concrete Anthropic model reproduces it without the router.</td>
 </tr>
 <tr>
 <td>Local connection/timeout or HTTP 413</td>
