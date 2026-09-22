@@ -1,6 +1,6 @@
 {
   "name": "pi-router-jev",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Task-aware model routing for Pi with Jev, local multilingual Laya, Claude and Codex",
   "license": "MIT",
   "author": "MejiasDev",
@@ -33,7 +33,7 @@
     "scripts/laya-server.py"
   ],
   "scripts": {
-    "test": "node --test index.test.mjs",
+    "test": "node --test index.test.mjs scripts/package_test.mjs",
     "docs": "node scripts/build-docs.mjs",
     "test:local": "python3 -m unittest discover -s scripts -p \"*_test.py\""
   },

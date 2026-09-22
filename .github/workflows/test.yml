@@ -10,6 +10,12 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Minimum supported Pi (lockfile) and the newest validated release.
+        pi: ["0.85.1", "0.87.0"]
+    name: test (pi ${{ matrix.pi }})
     steps:
       - uses: actions/checkout@v4
       - uses: nubjs/setup-nub@v0.6.0
@@ -17,7 +23,10 @@ jobs:
           nub-version: 0.1.10
           node-version: 22.19.0
       - run: nub install --frozen-lockfile --ignore-scripts
+      - name: Use Pi ${{ matrix.pi }}
+        if: ${{ matrix.pi != '0.85.1' }}
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund "@earendil-works/pi-coding-agent@${{ matrix.pi }}"
       - run: nub run test
       - run: python3 -m unittest discover -s scripts -p '*_test.py'
       - run: nub run docs
-      - run: git diff --exit-code -- docs/
+      - run: git diff --exit-code -- docs/ package.json lock.yaml

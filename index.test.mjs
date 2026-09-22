@@ -1637,3 +1637,168 @@ test('unconfigured installs default to Jev and the Claude web-development preset
 	assert.match(h.notices.at(-1)[0], /Provider: anthropic/);
 	assert.match(h.notices.at(-1)[0], /Classifier: jev/);
 });
+
+// --- 0.8.0: diagnostics, strict failure classification, explicit fallbacks, evaluator limits ---
+
+const { classifyBackendError, estimateContextTokens, contextFits, EVALUATOR_LIMITS } = await jiti.import("./index.ts");
+
+test('backend failures are classified with authentication and runtime precedence over usage-limit wording', async (t) => {
+	assert.equal(classifyBackendError('401 unauthorized: rate limit information unavailable'), 'authentication_failure');
+	assert.equal(classifyBackendError("Cannot find module '/pi/chunk.js' (429 retries)"), 'runtime_failure');
+	assert.equal(classifyBackendError('HTTP 429 Too Many Requests'), 'usage_limit');
+	assert.equal(classifyBackendError("400 You're out of extra usage."), 'usage_limit');
+	assert.equal(classifyBackendError('rate_limit_error: quota exceeded'), 'usage_limit');
+	assert.equal(classifyBackendError('prompt is too long: 250000 tokens > 200000 maximum'), 'context_overflow');
+	assert.equal(classifyBackendError('500 internal error'), 'unknown');
+	assert.match(explainBackendError('401 unauthorized: rate limit information unavailable', CLAUDE[2]), /\[auth\]/);
+	assert.match(explainBackendError('prompt is too long', CLAUDE[2]), /\[context\].*No automatic model retry/);
+	configureWeb(t, { rateLimitFallback: GLM });
+	mockGateway(t, () => CLAUDE[2]);
+	const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: '401 unauthorized: rate limit information unavailable' } });
+	const result = await h.stream().result();
+	assert.equal(result.stopReason, 'error');
+	assert.match(result.errorMessage, /\[auth\]/);
+	assert.equal(h.calls.length, 1, 'ambiguous error text never triggers a cross-provider retry');
+	assert.deepEqual(h.entries.filter(e => e.name === 'jev-pin').map(e => e.data.target), [CLAUDE[2]]);
+	await h.commands.get('jev').handler('explain', h.ctx);
+	assert.match(h.notices.at(-1)[0], /Last backend failure: anthropic\/claude-opus-5 → authentication_failure; no retry/);
+});
+
+test('usage-limit fallback checks context fit before retrying and reports the estimate', async (t) => {
+	const small = { contextWindow: 1000, maxTokens: 500 };
+	const assistant = { role: 'assistant', content: [{ type: 'text', text: 'done' }], api: 'anthropic-messages', provider: 'anthropic', model: 'claude-opus-5', usage: { ...usage, input: 900 }, stopReason: 'stop', timestamp: 2 };
+	const long = { systemPrompt: 'x', tools: [], messages: [user('Review this', 1), assistant, user('Continue', 3)] };
+	assert.equal(estimateContextTokens(long).measured, true);
+	assert.ok(estimateContextTokens(long).tokens >= 900 + 10 + 50);
+	assert.equal(estimateContextTokens(context('Fix a typo')).measured, false);
+	assert.equal(contextFits(long, small).ok, false);
+	assert.equal(contextFits(long, { contextWindow: 272000, maxTokens: 128000 }).ok, true);
+	assert.equal(contextFits(long, small, 10).reserve, 10);
+	configureWeb(t, { rateLimitFallback: GLM });
+	mockGateway(t, () => CLAUDE[2]);
+	const h = await harness({ refs: [...CLAUDE, GLM], failures: { [CLAUDE[2]]: '429 rate_limit_error' } });
+	Object.assign(h.models.at(-1), small);
+	const result = await h.stream(long).result();
+	assert.equal(result.stopReason, 'error');
+	assert.match(result.errorMessage, /\[usage-limit\]/);
+	assert.equal(h.calls.length, 1, 'a doomed fallback attempt is never made');
+	assert.match(h.notices.at(-1)[0], /cannot hold this conversation \(measured ~\d+ \+ 500 output > 1000 tokens\)/);
+	assert.deepEqual(h.entries.filter(e => e.name === 'jev-pin').map(e => e.data.target), [CLAUDE[2]]);
+	await h.commands.get('jev').handler('explain', h.ctx);
+	assert.match(h.notices.at(-1)[0], /usage_limit; skipped zai\/glm-5.3: context measured/);
+});
+
+test('familyFallback makes the family fallback explicit instead of relying on option order', async (t) => {
+	const base = { options: { [FAST]: { description: 'x' }, [DEEP]: { description: 'y' }, [CLAUDE[0]]: { description: 'z' } }, fallback: FAST };
+	assert.deepEqual(parseConfig({ ...base, familyFallback: { openai: DEEP, anthropic: CLAUDE[0] } }).familyFallback, { openai: DEEP, anthropic: CLAUDE[0] });
+	assert.deepEqual(parseConfig(base).familyFallback, {});
+	for (const familyFallback of ['x', { zai: GLM }, { openai: CLAUDE[0] }, { anthropic: 'anthropic/missing' }, { openai: 'auto/jev' }]) {
+		assert.throws(() => parseConfig({ ...base, familyFallback }), /familyFallback/);
+	}
+	const evaluatorDown = () => new Response('{}', { status: 500 });
+	mockGateway(t, evaluatorDown);
+	const preset = configureWeb(t, { provider: 'openai' });
+	const implied = await harness({ refs: CODEX });
+	assert.equal((await implied.stream().result()).model, 'gpt-5.6-sol', 'first eligible openai route in option order');
+	await implied.commands.get('jev').handler('doctor', implied.ctx);
+	assert.match(implied.notices.at(-1)[0], /Effective fallback: openai-codex\/gpt-5.6-sol \(option order\)/);
+	assert.match(implied.notices.at(-1)[0], /implied by option order.*Set familyFallback\.openai/);
+	configureWeb(t, { provider: 'openai', familyFallback: { openai: CODEX[0] }, options: Object.fromEntries(Object.entries(preset.options).reverse()) });
+	const explicit = await harness({ refs: CODEX });
+	assert.equal((await explicit.stream().result()).model, 'gpt-5.6-luna');
+	assert.equal(explicit.entries.find(e => e.name === 'jev-route').data.source, 'fallback');
+	await explicit.commands.get('jev').handler('doctor', explicit.ctx);
+	assert.match(explicit.notices.at(-1)[0], /Effective fallback: openai-codex\/gpt-5.6-luna \(familyFallback\)/);
+	assert.doesNotMatch(explicit.notices.at(-1)[0], /implied by option order/);
+	configureWeb(t, { provider: 'anthropic', familyFallback: { openai: CODEX[0] } });
+	const untouched = await harness({ refs: WEB_MODELS });
+	assert.equal((await untouched.stream().result()).model, 'claude-sonnet-5', 'the other family keeps its configured fallback');
+});
+
+test('local classifier reports an exact choice-limit reason before any request', async (t) => {
+	const previous = globalThis.fetch;
+	const requests = [];
+	globalThis.fetch = async (url) => { requests.push(String(url)); return Response.json({ ready: true, busy: false, limits: { maxChoices: 20 } }); };
+	t.after(() => { globalThis.fetch = previous; });
+	const preset = configureWeb(t, { classifier: 'local', options: Object.fromEntries(Object.entries(webConfig().options).map(([ref, route]) => [ref, { ...route, thinking: 'auto' }])) });
+	const h = await harness({ refs: WEB_MODELS, gatewayKey: false });
+	assert.equal((await h.stream().result()).model, 'claude-sonnet-5', 'the configured fallback is used');
+	assert.deepEqual(requests, [], 'no evaluation request is sent when the choice set cannot be accepted');
+	const route = h.entries.find(e => e.name === 'jev-route').data;
+	assert.equal(route.source, 'fallback');
+	assert.match(route.reason, new RegExp(`local classifier accepts at most ${EVALUATOR_LIMITS.local.maxChoices} choices but the configuration offers (\\d+) model/effort profiles`));
+	assert.ok(Number(route.reason.match(/offers (\d+)/)[1]) > 20);
+	assert.ok(route.offered > 20);
+	assert.match(h.notices.find(([text]) => text.startsWith('Jev: local classifier'))[0], /reduce automatic thinking choices, set minThinking, or set provider/);
+	await h.commands.get('jev').handler('doctor', h.ctx);
+	const doctor = h.notices.at(-1)[0];
+	assert.match(doctor, /Local classifier accepts at most 20 choices; eligible routes expand to \d+ model\/effort profiles/);
+	assert.match(doctor, /Local server: ready/);
+	assert.match(doctor, /Evaluator limits: choices 20, questions 20, request 28000 bytes/);
+	assert.deepEqual(requests, ['http://127.0.0.1:8765/health'], 'doctor probes only the local health endpoint');
+	assert.ok(preset.options[CLAUDE[0]]);
+});
+
+function webConfig() {
+	return JSON.parse(readFileSync(new URL('./examples/web-development.json', import.meta.url), 'utf8')).jevRouter;
+}
+
+test('/jev distinguishes eligible, excluded, and fallback-only routes with reasons', async (t) => {
+	configureWeb(t, { provider: 'anthropic', rateLimitFallback: CODEX[2] });
+	mockGateway(t, () => CLAUDE[1]);
+	const h = await harness({ refs: [...CLAUDE, CODEX[2], CODEX[0]] });
+	const find = h.ctx.modelRegistry.find;
+	h.ctx.modelRegistry.find = (provider, id) => provider === 'zai' ? { provider, id, reasoning: true, api: 'openai-completions', input: ['text'], contextWindow: 1, maxTokens: 1 } : find(provider, id);
+	await h.commands.get('jev').handler('', h.ctx);
+	const status = h.notices.at(-1)[0];
+	assert.match(status, /Eligible now \(3\/8\)/);
+	assert.match(status, /anthropic\/claude-opus-5\s+eligible\s+\d+ effort choice/);
+	assert.match(status, /zai\/glm-5\.3\s+excluded\s+authentication not configured \(\/login zai\)/);
+	assert.match(status, /openai-codex\/gpt-5\.6-sol\s+fallback only\s+outside provider anthropic; usage-limit fallback only/);
+	assert.match(status, /openai-codex\/gpt-5\.6-luna\s+excluded\s+provider preference \(anthropic\)/);
+	assert.match(status, /openai-codex\/gpt-6-astra\s+excluded\s+not in Pi's model registry/);
+	assert.match(status, /Use \/jev doctor/);
+	await h.commands.get('jev').handler('bogus', h.ctx);
+	assert.match(h.notices.at(-1)[0], /Unknown \/jev subcommand "bogus"/);
+	assert.equal(h.notices.at(-1)[1], 'warning');
+	assert.equal(h.calls.length, 0, 'status never generates or evaluates');
+});
+
+test('/jev doctor stays local, never verifies credentials, and reports configured evaluator facts', async (t) => {
+	configureWeb(t, { rateLimitFallback: GLM });
+	const requests = mockGateway(t);
+	const h = await harness({ refs: CLAUDE });
+	await h.commands.get('jev').handler('doctor', h.ctx);
+	const doctor = h.notices.at(-1)[0];
+	assert.match(doctor, /TypeSafe key: not configured/);
+	assert.match(doctor, /Gateway credential: configured/);
+	assert.match(doctor, /Local server: not used/);
+	assert.match(doctor, /Routes \(3\/8 eligible, 3 effort profiles\)/);
+	assert.match(doctor, /Effective fallback: anthropic\/claude-sonnet-5 \(fallback\)/);
+	assert.match(doctor, /rateLimitFallback zai\/glm-5.3 is not available; usage-limit retries will be skipped/);
+	assert.match(doctor, /reported as configured, not verified/);
+	assert.equal(requests.length, 0, 'doctor makes no cloud request');
+	const empty = await harness({ refs: CODEX });
+	await empty.commands.get('jev').handler('doctor', empty.ctx);
+	assert.match(empty.notices.at(-1)[0], /No eligible routes/);
+	assert.match(empty.notices.at(-1)[0], /Fallback anthropic\/claude-sonnet-5 is not eligible/);
+});
+
+test('/jev explain reports the last decision with evaluator, reason, and usage, and survives reload', async (t) => {
+	configureWeb(t);
+	mockGateway(t, () => CLAUDE[1]);
+	const h = await harness({ refs: WEB_MODELS });
+	await h.commands.get('jev').handler('explain', h.ctx);
+	assert.match(h.notices.at(-1)[0], /No routing decision recorded/);
+	assert.equal((await h.stream(context('Implement the agreed API integration')).result()).model, 'claude-fable-5-1');
+	await h.commands.get('jev').handler('explain', h.ctx);
+	const explain = h.notices.at(-1)[0];
+	assert.match(explain, /Pinned: anthropic\/claude-fable-5-1, thinking medium/);
+	assert.match(explain, /Last route: anthropic\/claude-fable-5-1 at medium\nDecided by: jev \(Gateway\)\nReason: evaluator choice\nOffered profiles: 3/);
+	assert.match(explain, /Usage: 1000 in \/ 0 out, estimated \$/);
+	assert.match(explain, /Eligible now:\n/);
+	const resumed = await harness({ refs: WEB_MODELS, history: h.entries });
+	await resumed.commands.get('jev').handler('explain', resumed.ctx);
+	assert.match(resumed.notices.at(-1)[0], /Last route: anthropic\/claude-fable-5-1 at medium\nDecided by: jev \(Gateway\)/);
+	assert.equal(resumed.calls.length, 0);
+});

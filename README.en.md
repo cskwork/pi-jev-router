@@ -16,7 +16,7 @@ Git installation: `pi install git:github.com/cskwork/pi-jev-router`. Keep one in
 
 1. Use `/login` for your generation provider. For Jev, set a TypeSafe key as described below, or use `/login vercel-ai-gateway` / `AI_GATEWAY_API_KEY`.
 2. Run `/reload`, then `/model auto/jev`. To start every new session on the router, set `"defaultProvider": "auto"` and `"defaultModel": "jev"` in global settings, or press Ctrl+S on `auto/jev` in `/model`.
-3. Start with your actual task. `/jev` shows the pin, selected effort, and fork suggestions.
+3. Start with your actual task. `/jev` shows the pin, selected effort, fork suggestions, and which configured routes are eligible right now. `/jev doctor` checks the configuration and evaluator; `/jev explain` shows why the last decision or fallback happened.
 
 ## Classifier and API keys
 
@@ -45,7 +45,7 @@ python3 -m venv .venv-laya
 
 Leave that terminal open. First startup downloads the checkpoint from Hugging Face. The service binds to `127.0.0.1:8765` and loads `convaiinnovations/laya`'s **multilingual** subfolder on CPU before accepting requests. The same model handles Korean, English, and other supported languages. `/health` reports readiness. Stop with Ctrl+C. The extension does not install Python, download weights, or launch a daemon automatically. The npm tarball also includes the server script.
 
-[Laya](https://github.com/NandhaKishorM/laya) has a much shorter context than Jev. The bridge rejects state that exceeds the checkpoint's token budget and limits questions/choices to 20. Laya internally bounds question and option descriptions; it is not equivalent to Jev for long or ambiguous tasks. A rejected request or stopped server uses the configured generation fallback with a warning. No cloud request is made in explicit local mode. Routing decisions are heuristics, not QA results or permission to act.
+[Laya](https://github.com/NandhaKishorM/laya) has a much shorter context than Jev. The bridge rejects state that exceeds the checkpoint's token budget and limits questions/choices to 20. Laya internally bounds question and option descriptions; it is not equivalent to Jev for long or ambiguous tasks. Every configured model expands into one choice per allowed thinking level, so eight models with `"thinking": "auto"` exceed the limit; the router checks this before sending anything and falls back with an exact reason (`local classifier accepts at most 20 choices but the configuration offers N model/effort profiles`), and `/jev doctor` reports the count. The bridge serves connections on threads with a socket timeout, keeps one loaded model and one active inference, queues at most two waiting requests for `--queue-wait` seconds (default 5), and answers `503` when busy or expired; `/health` reports `ready`, `busy`, `queued`, and `limits` separately. A rejected request or stopped server uses the configured generation fallback with a warning. No cloud request is made in explicit local mode. Routing decisions are heuristics, not QA results or permission to act.
 
 ## Configure
 
@@ -72,7 +72,7 @@ Merge `jevRouter` into **global** `~/.pi/agent/settings.json`, then `/reload`:
 }
 ```
 
-Only listed, authenticated models are eligible; `fallback` and `rateLimitFallback` must be listed and authenticated too. Unauthenticated models are dropped silently, so check the live candidates with `/jev`. Routes replace the default list; they aren't merged. `PI_CODING_AGENT_DIR` is respected; project settings cannot override routing.
+Only listed, authenticated models are eligible; `fallback` and `rateLimitFallback` must be listed and authenticated too. `/jev` lists every configured route as **eligible**, **excluded** with the reason (not in Pi's registry, authentication not configured, provider preference, or no thinking level meeting the floor), or **fallback only** for a `rateLimitFallback` outside the selected family. A configured-but-unavailable model is never shown the same way as a selectable one. Routes replace the default list; they aren't merged. `PI_CODING_AGENT_DIR` is respected; project settings cannot override routing.
 
 Without configuration, the web-development preset below is used: Jev-first classification, Claude models with Opus at high effort and the rest at medium, Sonnet fallback, Sol usage-limit fallback, a five-second timeout, and monitoring/skill selection off. The custom example above replaces that preset with Codex routes and automatic effort.
 
@@ -97,7 +97,7 @@ These are editable task descriptions, not model benchmarks or guaranteed classif
 
 The preset defaults to `"provider": "anthropic"`. Change just this field to `"provider": "openai"` to select from the configured `openai-codex` models. Run `/reload`, then start a new session. Existing pins remain unchanged. Omit `provider` to let Jev choose across all configured providers, as in upstream. `/jev` shows the selected family.
 
-If neither Jev nor the local classifier can evaluate the task, the router uses `fallback` if it belongs to the selected family; otherwise it uses the first eligible model in that family's **configured option order**. In this preset that means Sonnet for Claude and Sol for OpenAI. Models without authentication or compatible input/thinking are excluded. If the selected family has no eligible model, the request fails explicitly. The separate `rateLimitFallback` may cross provider families.
+If neither Jev nor the local classifier can evaluate the task, the router uses `familyFallback` for the selected family when set, for example `"familyFallback": {"openai": "openai-codex/gpt-5.6-luna"}`; otherwise `fallback` if it belongs to the selected family; otherwise the first eligible model in that family's **configured option order**. In this preset that means Sonnet for Claude and Sol for OpenAI. `/jev doctor` reports the effective fallback and warns when it is only implied by option order. Models without authentication or compatible input/thinking are excluded. If the selected family has no eligible model, the request fails explicitly. The separate `rateLimitFallback` may cross provider families.
 
 Select `/model auto/jev` to use the router. The preset disables monitoring and automatic skill loading to avoid extra evaluations. New sessions choose a model for their first task; later tasks remain on that pin. Start a new session or explicitly choose a model when changing stages.
 
@@ -107,9 +107,9 @@ SDLC Kit continues to own its stages, approvals, and verification evidence. The 
 
 Set `"rateLimitFallback": "zai/glm-5.3"` inside `jevRouter`, with that model also listed in `options`. This is separate from `fallback`, which handles Jev classification failures. Without this setting, backend errors behave as before.
 
-For a main request, a provider-reported rate or usage-limit error before any text, reasoning, or tool output triggers **one** attempt on the configured model. This includes HTTP 429 and Anthropic's `out of extra usage` error. The router uses the fallback's own authentication and supported thinking policy, and reports the switch. A successful response pins the fallback for the rest of the session, including reload/resume. A failed attempt keeps the original pin and returns the failure.
+For a main request, a provider-reported rate or usage-limit error before any text, reasoning, or tool output triggers **one** attempt on the configured model. This includes HTTP 429 and Anthropic's `out of extra usage` error. Backend failures are first classified as runtime, authentication, usage-limit, context-overflow, or unknown; authentication and runtime wording takes precedence, so an error such as `401 ... rate limit information unavailable` is reported as an authentication failure and never retried on another provider. The router uses the fallback's own authentication and supported thinking policy, and reports the switch. A successful response pins the fallback for the rest of the session, including reload/resume. A failed attempt keeps the original pin and returns the failure.
 
-There is no fallback after partial output, on cancellation, for auxiliary requests, or for unrelated errors such as authentication failures. Unavailable models, incompatible image inputs, and unsupported thinking policies are not retried. The complete original context is forwarded without truncation; a smaller model may reject a long conversation. Provider or Pi retries remain separate from this single router fallback. Use a different provider when models share the same exhausted quota. A switch can lose prompt-cache savings.
+There is no fallback after partial output, on cancellation, for auxiliary requests, or for unrelated errors such as authentication failures. Unavailable models, incompatible image inputs, and unsupported thinking policies are not retried. The complete original context is forwarded without truncation. Before retrying, the router estimates the conversation size from the last provider-reported usage (or bytes when none exists), reserves the output budget, and skips the attempt with a warning when the replacement's context window cannot hold it; `/jev explain` shows the estimate and whether it was measured or estimated. Provider or Pi retries remain separate from this single router fallback. Use a different provider when models share the same exhausted quota. A switch can lose prompt-cache savings.
 
 ### Thinking
 
@@ -203,7 +203,7 @@ nub run test
 nub run docs
 ```
 
-Tests mock network responses; no API keys or paid requests are needed.
+Tests mock network responses; no API keys or paid requests are needed. `nub run test` also runs `scripts/package_test.mjs`, which checks that the npm tarball contains every file the extension imports. CI runs the suite against Pi 0.85.1 (the lockfile) and 0.87.0.
 
 ## Publishing this fork
 
@@ -227,6 +227,8 @@ The release workflow uses npm trusted publishing. Configure a trusted publisher 
 | `Jev [runtime]` / `Cannot find module .../dist/bundle/chunks/...` | Pi cannot load a provider module, often after updating a running Pi process. Exit and restart Pi, then resume the session. If it persists, reinstall Pi. This is not an API-key or quota error. |
 | `Jev [auth]` | Generation credentials or model permissions failed. Use the named provider's `/login`. No model retry occurs for authentication errors. |
 | `Jev [usage-limit]` | Provider quota or rate limit. A configured eligible `rateLimitFallback` is tried once before any output; otherwise wait or choose a model. |
+| `Jev [context]` | The provider rejected the conversation as too long. Use `/compact` or fork a shorter session. No model retry occurs. |
+| `/jev doctor` lists a problem | Follow the listed fix: `/login` the provider, set `familyFallback`, reduce automatic thinking choices for the local classifier, or start the Laya bridge. Credentials are reported as configured, not verified. |
 | `Vercel AI Gateway refused the Jev request (HTTP 403)` | The key is valid, but the Vercel team has no payment method on file or the key lacks AI Gateway access. Adding a card at vercel.com/ai unlocks the free credits; until then the generation fallback is used. |
 | `TypeSafe rejected credentials (401)` | Replace the TypeSafe key, then reload or restart depending on where it is configured. |
 | Claude routes hang at 100% CPU with no output | Not the router. `pi-background-tasks` 2.6.2's `attribution` feature replaces the Anthropic provider and loops forever on the system messages Pi 0.86+ keeps in the transcript. Export `PI_BG_FEATURES=process,delegate,fusion,attested` before starting Pi. Selecting a concrete Anthropic model reproduces it without the router. |
