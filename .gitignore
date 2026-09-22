@@ -7,3 +7,6 @@ package-lock.json
 
 .venv-laya/
 __pycache__/
+
+.superdesign/
+.playwright-cli/
