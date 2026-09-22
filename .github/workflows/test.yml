@@ -3,6 +3,7 @@ name: Test
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,6 +27,7 @@ jobs:
       - name: Use Pi ${{ matrix.pi }}
         if: ${{ matrix.pi != '0.85.1' }}
         run: npm install --no-save --ignore-scripts --no-audit --no-fund "@earendil-works/pi-coding-agent@${{ matrix.pi }}"
+      - run: nub run typecheck
       - run: nub run test
       - run: python3 -m unittest discover -s scripts -p '*_test.py'
       - run: nub run docs

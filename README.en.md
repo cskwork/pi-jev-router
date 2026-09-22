@@ -199,11 +199,12 @@ Move the old `routes.json` contents under `jevRouter` and unset `JEV_ROUTES_FILE
 
 ```sh
 nub install --frozen-lockfile --ignore-scripts
+nub run typecheck
 nub run test
 nub run docs
 ```
 
-Tests mock network responses; no API keys or paid requests are needed. `nub run test` also runs `scripts/package_test.mjs`, which checks that the npm tarball contains every file the extension imports. CI runs the suite against Pi 0.85.1 (the lockfile) and 0.87.0.
+`nub run typecheck` runs `tsc` against `tsconfig.json` (TypeScript and Node types are fetched by `npx`; nothing is added to the lockfile). Tests mock network responses; no API keys or paid requests are needed. `nub run test` also runs `scripts/package_test.mjs`, which checks that the npm tarball contains every file the extension imports. CI runs the suite against Pi 0.85.1 (the lockfile) and 0.87.0.
 
 ## Publishing this fork
 

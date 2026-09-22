@@ -35,7 +35,8 @@
   "scripts": {
     "test": "node --test index.test.mjs scripts/package_test.mjs",
     "docs": "node scripts/build-docs.mjs",
-    "test:local": "python3 -m unittest discover -s scripts -p \"*_test.py\""
+    "test:local": "python3 -m unittest discover -s scripts -p \"*_test.py\"",
+    "typecheck": "npx --yes -p typescript@5 -p @types/node@22 tsc -p tsconfig.json"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

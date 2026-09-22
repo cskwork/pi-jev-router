@@ -677,7 +677,8 @@ export default function jevRouter(pi: ExtensionAPI) {
 			const input = routingInput(context);
 			if (input.key === checkedKey || (!input.messages && !input.reason)) return pin;
 		}
-		const profiles = models.filter((model) => (!preferredProvider || model.provider === preferredProvider) &&
+		type Profile = { target: string; thinking: ModelThinkingLevel; description: { model: string; task: string | RouteCriteria; thinking: ModelThinkingLevel; effort: string; keepCurrentModel?: boolean } };
+		const profiles: Profile[] = models.filter((model) => (!preferredProvider || model.provider === preferredProvider) &&
 			(!pin || (`${model.provider}/${model.id}` !== pin.target && !suggestedModels.has(`${model.provider}/${model.id}`)))).flatMap((model) => {
 			const target = `${model.provider}/${model.id}`;
 			const route = config.options[target];
@@ -866,7 +867,9 @@ export default function jevRouter(pi: ExtensionAPI) {
 						showStatus(ctx);
 					}
 					const thinking = selection.thinking;
-					const downstream = provider.streamSimple(auth.baseUrl ? { ...target, baseUrl: auth.baseUrl } : target, context, {
+					// Pi hands the router the normalized transcript it would give any provider;
+					// forward it unchanged. The brand only exists at the type level.
+					const downstream = provider.streamSimple(auth.baseUrl ? { ...target, baseUrl: auth.baseUrl } : target, context as unknown as Parameters<typeof provider.streamSimple>[1], {
 						...options,
 						onPayload: onPayload ?? options.onPayload,
 						// Replace, never merge, the router's credential envelope.

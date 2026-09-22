@@ -11,6 +11,7 @@
 - 로컬 Laya 분류기의 선택지 한도(20개)를 요청 전에 확인하고, 초과하면 정확한 사유와 함께 기본 모델을 사용합니다. 스킬 선택도 같은 한도를 확인합니다.
 - Laya 브리지가 연결을 스레드로 처리하고 소켓 시간 제한을 둡니다. 추론 슬롯은 하나이며 대기열은 2개로 제한하고 대기 만료 시 `503`을 돌려줍니다. `/health`가 `ready`, `busy`, `queued`, `limits`를 따로 보고합니다.
 - npm tarball에 확장이 불러오는 파일이 모두 포함되는지 확인하는 패키지 스모크 테스트를 추가하고, CI를 Pi 0.85.1과 0.87.0 매트릭스로 확장했습니다.
+- `nub run typecheck`(`tsconfig.json`)를 추가하고 CI에서 실행합니다. 이전부터 있던 타입 오류 두 건(모니터링 후보의 `keepCurrentModel`, Pi 0.87의 `TranscriptContext` 브랜드)을 고쳤습니다. `Test` 워크플로를 수동으로도 실행할 수 있습니다.
 
 `/jev` now shows per-route eligibility with exclusion reasons; `/jev doctor`
 checks configuration, evaluator, limits, and the effective fallback locally;
@@ -20,7 +21,8 @@ a context-fit preflight guards the usage-limit fallback, `familyFallback` makes
 family fallbacks explicit, the local choice limit is checked before any request,
 the Laya bridge gains threaded connections, socket timeouts, one inference slot
 with a bounded queue, and richer `/health`, plus a packaged-install smoke test
-and a Pi 0.85.1/0.87.0 CI matrix.
+a Pi 0.85.1/0.87.0 CI matrix, and a `typecheck` script that fixes two
+pre-existing type errors and runs in CI.
 
 ## 0.7.1 · 2026-09-22
 
