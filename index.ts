@@ -834,7 +834,7 @@ export default function jevRouter(pi: ExtensionAPI) {
 				if (!active) throw new Error("Jev router has no active Pi session.");
 				if (options.deferred) throw new Error("Select a concrete model for deferred generation; auto/jev does not support it.");
 				const ctx = active;
-				const hasImages = context.messages.some((item) => Array.isArray(item.content) && item.content.some((part) => part.type === "image"));
+				const hasImages = context.messages.some((item: Context["messages"][number]) => Array.isArray(item.content) && item.content.some((part: { type: string }) => part.type === "image"));
 				const available = candidates(ctx).filter((candidate) => !hasImages || candidate.input.includes("image"));
 				if (!available.length) throw new Error("No authenticated Jev routes can handle this input. Check jevRouter in global settings.json and /login.");
 				let selection = await choose(ctx, context, available, options);

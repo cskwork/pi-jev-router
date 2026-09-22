@@ -179,7 +179,7 @@ nub run test
 nub run docs
 ```
 
-`nub run typecheck`는 `tsconfig.json` 기준으로 `tsc`를 실행합니다. TypeScript와 Node 타입은 `npx`가 내려받으며 잠금 파일에는 추가하지 않습니다. 테스트는 네트워크 응답을 모의 처리하며 API 키가 필요하지 않습니다. `nub run test`는 npm tarball에 확장이 불러오는 파일이 모두 들어 있는지 확인하는 `scripts/package_test.mjs`도 실행합니다. CI는 Pi 0.85.1(잠금 파일)과 0.87.0에서 테스트합니다. 로컬 서버 검증은 `python3 -m unittest discover -s scripts -p '*_test.py'`로 실행합니다.
+`nub run typecheck`는 설치된 Pi의 호환 타입을 테스트와 같은 방식으로 찾아 `index.ts`에 `tsc`를 실행하므로 패키지 관리자 배치 방식과 무관하게 동작합니다. 테스트는 네트워크 응답을 모의 처리하며 API 키가 필요하지 않습니다. `nub run test`는 npm tarball에 확장이 불러오는 파일이 모두 들어 있는지 확인하는 `scripts/package_test.mjs`도 실행합니다. CI는 Pi 0.85.1(잠금 파일)과 0.87.0에서 테스트합니다. 로컬 서버 검증은 `python3 -m unittest discover -s scripts -p '*_test.py'`로 실행합니다.
 
 공개 npm 이름은 `pi-router-jev`입니다. `pi-package` 키워드와 `pi.extensions`가 있으므로 [Pi 공식 패키지 목록](https://pi.dev/packages)의 수집 대상입니다. 게시 후 npm 버전과 실제 목록을 확인하세요. 검색 반영에는 시간이 걸릴 수 있습니다.
 

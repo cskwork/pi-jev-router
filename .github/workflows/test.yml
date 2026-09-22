@@ -26,9 +26,13 @@ jobs:
       - run: nub install --frozen-lockfile --ignore-scripts
       - name: Use Pi ${{ matrix.pi }}
         if: ${{ matrix.pi != '0.85.1' }}
-        run: npm install --no-save --ignore-scripts --no-audit --no-fund "@earendil-works/pi-coding-agent@${{ matrix.pi }}"
+        # nub owns node_modules; npm cannot modify its tree. This rewrites the
+        # lockfile in the runner only, so the lockfile diff below excludes it.
+        run: nub add -D "@earendil-works/pi-coding-agent@${{ matrix.pi }}" --ignore-scripts
       - run: nub run typecheck
       - run: nub run test
       - run: python3 -m unittest discover -s scripts -p '*_test.py'
       - run: nub run docs
-      - run: git diff --exit-code -- docs/ package.json lock.yaml
+      - run: git diff --exit-code -- docs/
+      - if: ${{ matrix.pi == '0.85.1' }}
+        run: git diff --exit-code -- package.json lock.yaml

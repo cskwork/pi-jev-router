@@ -36,7 +36,7 @@
     "test": "node --test index.test.mjs scripts/package_test.mjs",
     "docs": "node scripts/build-docs.mjs",
     "test:local": "python3 -m unittest discover -s scripts -p \"*_test.py\"",
-    "typecheck": "npx --yes -p typescript@5 -p @types/node@22 tsc -p tsconfig.json"
+    "typecheck": "node scripts/typecheck.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -52,7 +52,9 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
-    "marked": "18.0.13"
+    "@types/node": "22.19.0",
+    "marked": "18.0.13",
+    "typescript": "5.9.3"
   },
   "dependencies": {
     "@ai-sdk/typesafe-ai": "3.0.4",
