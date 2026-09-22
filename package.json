@@ -1,6 +1,6 @@
 {
   "name": "pi-router-jev",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Task-aware model routing for Pi with Jev, local multilingual Laya, Claude and Codex",
   "license": "MIT",
   "author": "MejiasDev",

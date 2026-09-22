@@ -1,5 +1,16 @@
 # 변경 기록 / Changelog
 
+## 0.8.1 · 2026-09-22
+
+- 0.8.0의 첫 게시 버전입니다. 기능은 0.8.0과 같습니다.
+- `nub run typecheck`가 `npx` 대신 설치된 devDependency(`typescript`, `@types/node`)를 사용하고, 설치된 Pi의 호환 타입을 테스트와 같은 방식으로 찾습니다.
+- CI의 Pi 0.87.0 매트릭스가 npm 대신 nub로 버전을 바꿉니다. GitHub Actions에서 두 버전 모두 통과를 확인했습니다.
+
+First published build of the 0.8 line, functionally identical to 0.8.0.
+`typecheck` now uses installed dev dependencies and resolves Pi's compat types
+like the tests do; the CI matrix switches Pi versions with nub. Both matrix
+legs pass on GitHub Actions.
+
 ## 0.8.0 · 2026-09-22
 
 - `/jev`가 설정한 경로마다 지금 선택 가능한지(eligible), 왜 제외되었는지(excluded: 레지스트리 없음, 인증 미설정, 계열 선택, 최소 추론 수준), 사용량 제한 대체 전용인지(fallback only)를 표시합니다.
